@@ -1,5 +1,5 @@
 [project]
-name = "flight-monitor"
+name = "flights-watcher"
 version = "0.1.0"
 description = "Monitor 24/7 de passagens aéreas e alertas automáticos via Google Flights"
 readme = "README.md"
