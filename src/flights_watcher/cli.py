@@ -135,7 +135,7 @@ def test_alert(
         destination="CGH",
         departure_date="2027-09-03",
         return_date="2027-09-06",
-        price=450.0,
+        price=480.0,
         currency="BRL",
         airline="LATAM Airlines",
         stops=0,
@@ -144,7 +144,7 @@ def test_alert(
         return_departure="18:00",
         return_arrival="19:45",
         total_duration_minutes=105,
-        google_flights_url="https://www.google.com/travel/flights",
+        google_flights_url="https://www.google.com/travel/flights?q=flights%20from%20BSB%20to%20CGH%20on%202027-09-03%20returning%202027-09-06",
     )
 
     if channel in ("all", "email"):
