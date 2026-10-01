@@ -4,7 +4,13 @@ import time
 from loguru import logger
 
 from flights_watcher.clients.flights_client import FlightSearchClient
-from flights_watcher.clients.notifier import CompositeNotifier, ConsoleNotifier, NotifierPort, TelegramNotifier
+from flights_watcher.clients.notifier import (
+    CompositeNotifier,
+    ConsoleNotifier,
+    EmailNotifier,
+    NotifierPort,
+    TelegramNotifier,
+)
 from flights_watcher.config import settings
 from flights_watcher.domain.models import FlightDeal, RouteConfig
 from flights_watcher.storage.repository import FlightRepository
@@ -23,7 +29,7 @@ class MonitorService:
         self.search_client = search_client or FlightSearchClient()
         self.repository = repository or FlightRepository(settings.DATABASE_PATH)
         self.notifier = notifier or CompositeNotifier(
-            [ConsoleNotifier(), TelegramNotifier()]
+            [ConsoleNotifier(), EmailNotifier(), TelegramNotifier()]
         )
         self.routes_file = Path(routes_file or settings.ROUTES_FILE)
 

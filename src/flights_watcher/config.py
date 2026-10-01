@@ -11,6 +11,17 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Email / SMTP
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 465
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: str | None = None
+    ALERT_EMAIL_TO: str | None = None
+
+    # Compatibilidade com formatos legados de .env
+    EMAIL: str | None = None
+    SENHA_APP_EMAIL: str | None = None
+
     # Telegram
     TELEGRAM_BOT_TOKEN: str | None = None
     TELEGRAM_CHAT_ID: str | None = None
@@ -23,6 +34,18 @@ class Settings(BaseSettings):
     CHECK_INTERVAL_MINUTES: int = 60
     NOTIFICATION_COOLDOWN_HOURS: int = 12
     DEFAULT_CURRENCY: str = "BRL"
+
+    @property
+    def email_user(self) -> str | None:
+        return self.SMTP_USER or self.EMAIL
+
+    @property
+    def email_password(self) -> str | None:
+        return self.SMTP_PASSWORD or self.SENHA_APP_EMAIL
+
+    @property
+    def email_to(self) -> str | None:
+        return self.ALERT_EMAIL_TO or self.email_user
 
 
 settings = Settings()

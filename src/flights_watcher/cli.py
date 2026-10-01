@@ -4,7 +4,7 @@ from rich.console import Console
 from rich.table import Table
 
 from flights_watcher.clients.flights_client import FlightSearchClient
-from flights_watcher.clients.notifier import TelegramNotifier
+from flights_watcher.clients.notifier import EmailNotifier, TelegramNotifier
 from flights_watcher.config import settings
 from flights_watcher.domain.models import FlightDeal, RouteConfig
 from flights_watcher.services.monitor import MonitorService
@@ -85,47 +85,60 @@ def search(
 
 
 @app.command()
-def test_alert() -> None:
-    """Envia um alerta de teste no Telegram para validar a integração."""
-    telegram = TelegramNotifier()
-    if not telegram.is_configured:
-        console.print(
-            "[bold red]✗ Telegram não configurado.[/bold red] Defina TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID no seu arquivo .env!"
-        )
-        raise typer.Exit(1)
+def test_alert(
+    channel: str = typer.Option(
+        "all", "--channel", "-c", help="Canal de notificação: 'email', 'telegram' ou 'all'"
+    ),
+) -> None:
+    """Envia um alerta de teste para validar a integração de e-mail ou Telegram."""
+    email_notifier = EmailNotifier()
+    telegram_notifier = TelegramNotifier()
 
     fake_route = RouteConfig(
-        id="test-route",
-        origin="GRU",
-        destination="MIA",
-        departure_date="2026-11-10",
-        return_date="2026-11-20",
-        target_price=3000.0,
+        id="bsb-cgh-teste",
+        origin="BSB",
+        destination="CGH",
+        departure_date="2027-09-03",
+        return_date="2027-09-06",
+        target_price=550.0,
     )
     fake_deal = FlightDeal(
         route_id=fake_route.id,
-        origin="GRU",
-        destination="MIA",
-        departure_date="2026-11-10",
-        return_date="2026-11-20",
-        price=2450.0,
+        origin="BSB",
+        destination="CGH",
+        departure_date="2027-09-03",
+        return_date="2027-09-06",
+        price=450.0,
         currency="BRL",
-        airline="American Airlines",
+        airline="LATAM Airlines",
         stops=0,
-        outbound_departure="2026-11-10T22:30:00",
-        outbound_arrival="2026-11-11T06:10:00",
-        return_departure="2026-11-20T21:00:00",
-        return_arrival="2026-11-21T06:40:00",
-        total_duration_minutes=540,
+        outbound_departure="08:30",
+        outbound_arrival="10:15",
+        return_departure="18:00",
+        return_arrival="19:45",
+        total_duration_minutes=105,
         google_flights_url="https://www.google.com/travel/flights",
     )
 
-    console.print("Enviando mensagem de teste para o Telegram...")
-    success = telegram.send_deal_alert(fake_route, fake_deal)
-    if success:
-        console.print("[bold green]✓ Alerta de teste enviado com sucesso para o seu Telegram![/bold green]")
-    else:
-        console.print("[bold red]✗ Falha ao enviar alerta de teste.[/bold red]")
+    if channel in ("all", "email"):
+        if email_notifier.is_configured:
+            console.print(f"Enviando e-mail de teste para [cyan]{email_notifier.email_to}[/cyan]...")
+            if email_notifier.send_deal_alert(fake_route, fake_deal):
+                console.print(f"[bold green]✓ E-mail enviado com sucesso para {email_notifier.email_to}![/bold green]")
+            else:
+                console.print("[bold red]✗ Falha ao enviar e-mail de teste.[/bold red]")
+        else:
+            console.print("[yellow]⚠ E-mail não configurado no .env (SMTP_USER/PASSWORD ausentes).[/yellow]")
+
+    if channel in ("all", "telegram"):
+        if telegram_notifier.is_configured:
+            console.print(f"Enviando Telegram de teste para chat [cyan]{telegram_notifier.chat_id}[/cyan]...")
+            if telegram_notifier.send_deal_alert(fake_route, fake_deal):
+                console.print("[bold green]✓ Notificação enviada para o Telegram![/bold green]")
+            else:
+                console.print("[bold red]✗ Falha ao enviar notificação no Telegram.[/bold red]")
+        elif channel == "telegram":
+            console.print("[bold red]✗ Telegram não configurado no .env.[/bold red]")
 
 
 @app.command()
