@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
+flights-watcher = "flights_watcher.cli:app"
 flight-monitor = "flights_watcher.cli:app"
 
 [build-system]

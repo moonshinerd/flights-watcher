@@ -7,13 +7,13 @@ test:
 	uv run pytest -v
 
 check:
-	uv run flight-monitor check
+	uv run flights-watcher check
 
 start:
-	uv run flight-monitor start
+	uv run flights-watcher start
 
 history:
-	uv run flight-monitor history
+	uv run flights-watcher history
 
 clean:
 	rm -rf .pytest_cache __pycache__ *.db
