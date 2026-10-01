@@ -114,3 +114,14 @@ def test_get_stats(temp_repo, sample_deal):
     assert stats["total_notifications"] == 1
     assert len(stats["lowest_prices"]) == 1
     assert stats["lowest_prices"][0]["min_price"] == sample_deal.price
+
+
+def test_get_route_price_summary(temp_repo, sample_deal):
+    summary_empty = temp_repo.get_route_price_summary()
+    assert summary_empty == {}
+
+    temp_repo.save_deal(sample_deal)
+    summary = temp_repo.get_route_price_summary()
+    assert sample_deal.route_id in summary
+    assert summary[sample_deal.route_id]["min_price"] == sample_deal.price
+    assert summary[sample_deal.route_id]["checks_count"] == 1

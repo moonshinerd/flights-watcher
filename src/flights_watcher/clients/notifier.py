@@ -252,26 +252,138 @@ class EmailNotifier(NotifierPort):
         total_prices = stats.get("total_prices", 0)
         total_notifications = stats.get("total_notifications", 0)
         lowest_prices = stats.get("lowest_prices", [])
+        routes_matrix = stats.get("routes_matrix", [])
+        total_routes = stats.get("total_configured_routes", len(routes_matrix) or len(lowest_prices))
 
         subject = "💚 [Flights Watcher] Relatório Semanal de Saúde - Sistema 100% Operacional"
 
-        rows_html = ""
-        for lp in lowest_prices:
-            dates = f"{lp['departure_date']}" + (f" ➔ {lp['return_date']}" if lp.get('return_date') else "")
-            rows_html += f"""
-            <tr style="border-bottom: 1px solid #e5e7eb;">
-              <td style="padding: 10px 12px; font-weight: 600; color: #1f2937;">{lp['origin']} ➔ {lp['destination']}</td>
-              <td style="padding: 10px 12px; color: #4b5563; font-size: 13px;">{dates}</td>
-              <td style="padding: 10px 12px; font-weight: 700; color: #059669;">{lp['currency']} {lp['min_price']:.2f}</td>
-              <td style="padding: 10px 12px; color: #6b7280; font-size: 13px;">{lp['airline']}</td>
-            </tr>
-            """
+        if routes_matrix:
+            round_trips = [r for r in routes_matrix if r["trip_type"] == "Ida e Volta"]
+            one_way_out = [r for r in routes_matrix if r["trip_type"] == "Ida"]
+            one_way_in = [r for r in routes_matrix if r["trip_type"] == "Volta"]
 
-        if not rows_html:
-            rows_html = """
-            <tr>
-              <td colspan="4" style="padding: 16px; text-align: center; color: #6b7280;">Ainda não há cotações salvas no histórico.</td>
-            </tr>
+            def render_table_rows(items):
+                html = ""
+                for it in items:
+                    dates = f"{it['departure_date']}" + (f" ➔ {it['return_date']}" if it.get('return_date') else "")
+                    target_str = f"{it['currency']} {it['target_price']:.2f}"
+                    if it['min_price'] is not None:
+                        price_str = f"<strong style='color: #059669;'>{it['currency']} {it['min_price']:.2f}</strong>"
+                        cia_str = it['airline']
+                    else:
+                        price_str = "<span style='color: #9ca3af; font-size: 12px;'>Aguardando abertura</span>"
+                        cia_str = "<span style='color: #d1d5db;'>-</span>"
+
+                    badge_bg = "#ecfdf5" if "Abaixo" in it['status'] else ("#fffbeb" if "Acima" in it['status'] else "#f3f4f6")
+                    badge_color = "#047857" if "Abaixo" in it['status'] else ("#b45309" if "Acima" in it['status'] else "#6b7280")
+                    status_badge = f"<span style='background: {badge_bg}; color: {badge_color}; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; display: inline-block;'>{it['status_badge']} {it['status']}</span>"
+
+                    html += f"""
+                    <tr style="border-bottom: 1px solid #f3f4f6;">
+                      <td style="padding: 10px 12px; font-weight: 600; color: #1f2937;">{it['origin']} ➔ {it['destination']}</td>
+                      <td style="padding: 10px 12px; color: #4b5563; font-size: 13px;">{dates}</td>
+                      <td style="padding: 10px 12px; color: #4b5563; font-size: 13px;">{target_str}</td>
+                      <td style="padding: 10px 12px; font-size: 13px;">{price_str}</td>
+                      <td style="padding: 10px 12px; color: #6b7280; font-size: 12px;">{cia_str}</td>
+                      <td style="padding: 10px 12px; text-align: center;">{status_badge}</td>
+                    </tr>
+                    """
+                return html
+
+            body_sections_html = f"""
+            <h3 style="font-size: 15px; color: #111827; margin: 26px 0 10px 0; border-left: 4px solid #10b981; padding-left: 10px;">
+              ✈️ 1. Pacotes Fechados (Ida e Volta) — {len(round_trips)} Rotas (Meta: R$ 550,00)
+            </h3>
+            <div style="overflow-x: auto; margin-bottom: 20px;">
+              <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; background: #fafafa; border: 1px solid #e5e7eb; border-radius: 8px;">
+                <thead>
+                  <tr style="background: #f3f4f6; color: #4b5563; font-size: 11px; text-transform: uppercase;">
+                    <th style="padding: 10px 12px;">Rota</th>
+                    <th style="padding: 10px 12px;">Datas</th>
+                    <th style="padding: 10px 12px;">Meta</th>
+                    <th style="padding: 10px 12px;">Menor Preço</th>
+                    <th style="padding: 10px 12px;">Cia</th>
+                    <th style="padding: 10px 12px; text-align: center;">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {render_table_rows(round_trips)}
+                </tbody>
+              </table>
+            </div>
+
+            <h3 style="font-size: 15px; color: #111827; margin: 26px 0 10px 0; border-left: 4px solid #3b82f6; padding-left: 10px;">
+              🛫 2. Trechos Avulsos de Ida (BSB ➔ SP) — {len(one_way_out)} Rotas (Meta: R$ 275,00)
+            </h3>
+            <div style="overflow-x: auto; margin-bottom: 20px;">
+              <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; background: #fafafa; border: 1px solid #e5e7eb; border-radius: 8px;">
+                <thead>
+                  <tr style="background: #f3f4f6; color: #4b5563; font-size: 11px; text-transform: uppercase;">
+                    <th style="padding: 10px 12px;">Rota</th>
+                    <th style="padding: 10px 12px;">Data Ida</th>
+                    <th style="padding: 10px 12px;">Meta</th>
+                    <th style="padding: 10px 12px;">Menor Preço</th>
+                    <th style="padding: 10px 12px;">Cia</th>
+                    <th style="padding: 10px 12px; text-align: center;">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {render_table_rows(one_way_out)}
+                </tbody>
+              </table>
+            </div>
+
+            <h3 style="font-size: 15px; color: #111827; margin: 26px 0 10px 0; border-left: 4px solid #8b5cf6; padding-left: 10px;">
+              🛬 3. Trechos Avulsos de Volta (SP ➔ BSB) — {len(one_way_in)} Rotas (Meta: R$ 275,00)
+            </h3>
+            <div style="overflow-x: auto; margin-bottom: 20px;">
+              <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; background: #fafafa; border: 1px solid #e5e7eb; border-radius: 8px;">
+                <thead>
+                  <tr style="background: #f3f4f6; color: #4b5563; font-size: 11px; text-transform: uppercase;">
+                    <th style="padding: 10px 12px;">Rota</th>
+                    <th style="padding: 10px 12px;">Data Volta</th>
+                    <th style="padding: 10px 12px;">Meta</th>
+                    <th style="padding: 10px 12px;">Menor Preço</th>
+                    <th style="padding: 10px 12px;">Cia</th>
+                    <th style="padding: 10px 12px; text-align: center;">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {render_table_rows(one_way_in)}
+                </tbody>
+              </table>
+            </div>
+            """
+        else:
+            rows_html = ""
+            for lp in lowest_prices:
+                dates = f"{lp['departure_date']}" + (f" ➔ {lp['return_date']}" if lp.get('return_date') else "")
+                rows_html += f"""
+                <tr style="border-bottom: 1px solid #e5e7eb;">
+                  <td style="padding: 10px 12px; font-weight: 600; color: #1f2937;">{lp['origin']} ➔ {lp['destination']}</td>
+                  <td style="padding: 10px 12px; color: #4b5563; font-size: 13px;">{dates}</td>
+                  <td style="padding: 10px 12px; font-weight: 700; color: #059669;">{lp['currency']} {lp['min_price']:.2f}</td>
+                  <td style="padding: 10px 12px; color: #6b7280; font-size: 13px;">{lp['airline']}</td>
+                </tr>
+                """
+            if not rows_html:
+                rows_html = "<tr><td colspan='4' style='padding: 16px; text-align: center; color: #6b7280;'>Ainda não há cotações salvas no histórico.</td></tr>"
+
+            body_sections_html = f"""
+            <h3 style="font-size: 16px; color: #111827; margin: 24px 0 12px 0;">📊 Menores Preços Históricos por Rota</h3>
+            <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; background: #fafafa; border-radius: 8px; overflow: hidden; border: 1px solid #e5e7eb;">
+              <thead>
+                <tr style="background: #f3f4f6; color: #4b5563; font-size: 12px; text-transform: uppercase;">
+                  <th style="padding: 10px 12px;">Rota</th>
+                  <th style="padding: 10px 12px;">Datas</th>
+                  <th style="padding: 10px 12px;">Menor Preço</th>
+                  <th style="padding: 10px 12px;">Cia</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows_html}
+              </tbody>
+            </table>
             """
 
         plain_text = (
@@ -280,7 +392,7 @@ class EmailNotifier(NotifierPort):
             f"• Uptime: {uptime}\n"
             f"• Total de cotações gravadas: {total_prices}\n"
             f"• Total de alertas enviados: {total_notifications}\n"
-            f"• Rotas monitoradas ativas: {len(lowest_prices)}\n\n"
+            f"• Rotas configuradas ativas: {total_routes}\n\n"
             f"Para checar os logs completos:\n"
             f"ssh talos 'journalctl -u flights-watcher -n 50 --no-pager'\n"
         )
@@ -289,14 +401,14 @@ class EmailNotifier(NotifierPort):
 <html>
 <head><meta charset="utf-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f3f4f6; margin: 0; padding: 20px;">
-  <div style="max-width: 620px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.06); border: 1px solid #e5e7eb;">
+  <div style="max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.06); border: 1px solid #e5e7eb;">
     <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; padding: 24px; text-align: center;">
       <h2 style="margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.5px;">💚 Monitor 24/7 Ativo e Saudável</h2>
-      <p style="margin: 6px 0 0 0; opacity: 0.92; font-size: 14px;">Relatório Periódico de Integridade do Sistema</p>
+      <p style="margin: 6px 0 0 0; opacity: 0.92; font-size: 14px;">Relatório Periódico de Integridade & Matriz de Rotas</p>
     </div>
     <div style="padding: 24px;">
       <p style="color: #374151; font-size: 15px; line-height: 1.5; margin-top: 0;">
-        Olá! Este é o seu relatório semanal automático para confirmar que o <strong>Flights Watcher</strong> continua rodando normalmente no servidor e monitorando os voos para The Town 2027.
+        Olá! Este é o seu relatório semanal automático confirmando que o <strong>Flights Watcher</strong> continua ativo e vigiando todas as opções de voo para The Town 2027.
       </p>
 
       <table style="width: 100%; border-collapse: separate; border-spacing: 10px 0; margin: 20px 0;">
@@ -310,26 +422,13 @@ class EmailNotifier(NotifierPort):
             <div style="font-size: 16px; font-weight: 800; color: #1d4ed8; margin-top: 4px;">{total_prices}</div>
           </td>
           <td style="width: 33%; background: #fdf4ff; border: 1px solid #f5d0fe; border-radius: 8px; padding: 14px; text-align: center;">
-            <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #86198f;">Rotas</div>
-            <div style="font-size: 16px; font-weight: 800; color: #a21caf; margin-top: 4px;">{len(lowest_prices)}</div>
+            <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #86198f;">Rotas Ativas</div>
+            <div style="font-size: 16px; font-weight: 800; color: #a21caf; margin-top: 4px;">{total_routes}</div>
           </td>
         </tr>
       </table>
 
-      <h3 style="font-size: 16px; color: #111827; margin: 24px 0 12px 0;">📊 Menores Preços Históricos por Rota</h3>
-      <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; background: #fafafa; border-radius: 8px; overflow: hidden; border: 1px solid #e5e7eb;">
-        <thead>
-          <tr style="background: #f3f4f6; color: #4b5563; font-size: 12px; text-transform: uppercase;">
-            <th style="padding: 10px 12px;">Rota</th>
-            <th style="padding: 10px 12px;">Datas</th>
-            <th style="padding: 10px 12px;">Menor Preço</th>
-            <th style="padding: 10px 12px;">Cia</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows_html}
-        </tbody>
-      </table>
+      {body_sections_html}
 
       <div style="margin-top: 24px; padding: 14px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; font-size: 13px; color: #4b5563;">
         🔍 <strong>Diagnóstico rápido:</strong> Para inspecionar o serviço no servidor talos:

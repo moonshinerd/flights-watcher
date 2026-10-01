@@ -231,3 +231,24 @@ class FlightRepository:
                 "total_notifications": total_notifications,
                 "lowest_prices": lowest_prices,
             }
+
+    def get_route_price_summary(self) -> dict[str, dict]:
+        """Retorna resumo do menor preço histórico e da companhia para cada route_id."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT route_id, MIN(price) as min_price, currency, airline, COUNT(*) as checks_count
+                FROM price_history
+                GROUP BY route_id
+                """
+            )
+            summary = {}
+            for row in cursor.fetchall():
+                summary[row["route_id"]] = {
+                    "min_price": float(row["min_price"]) if row["min_price"] is not None else None,
+                    "currency": row["currency"],
+                    "airline": row["airline"] or "-",
+                    "checks_count": row["checks_count"],
+                }
+            return summary

@@ -278,6 +278,42 @@ def test_monitor_uptime_str(tmp_path, mock_search_client):
     assert "15 minuto(s)" in uptime
 
 
+def test_monitor_build_routes_matrix(tmp_path, mock_search_client, sample_deal):
+    routes_file = tmp_path / "routes.json"
+    routes_data = [
+        {"id": "r-rt", "origin": "BSB", "destination": "CGH", "departure_date": "2027-09-03", "return_date": "2027-09-06", "target_price": 500, "active": True},
+        {"id": "r-ow-out", "origin": "BSB", "destination": "GRU", "departure_date": "2027-09-03", "target_price": 275, "active": True},
+        {"id": "r-ow-in", "origin": "GRU", "destination": "BSB", "departure_date": "2027-09-06", "target_price": 275, "active": True},
+    ]
+    with open(routes_file, "w", encoding="utf-8") as f:
+        json.dump(routes_data, f)
+
+    repo = FlightRepository(tmp_path / "test.db")
+    service = MonitorService(search_client=mock_search_client, repository=repo, routes_file=routes_file)
+
+    # 1. Sem dados salvos -> todos Aguardando Abertura
+    matrix = service.build_routes_matrix()
+    assert len(matrix) == 3
+    assert matrix[0]["trip_type"] == "Ida e Volta"
+    assert matrix[0]["status"] == "Aguardando Abertura"
+    assert matrix[1]["trip_type"] == "Ida"
+    assert matrix[2]["trip_type"] == "Volta"
+
+    # 2. Salva preço abaixo da meta na rota 1
+    deal_cheap = sample_deal.model_copy(update={"route_id": "r-rt", "price": 450.0})
+    repo.save_deal(deal_cheap)
+
+    # 3. Salva preço acima da meta na rota 2
+    deal_expensive = sample_deal.model_copy(update={"route_id": "r-ow-out", "price": 350.0})
+    repo.save_deal(deal_expensive)
+
+    matrix = service.build_routes_matrix()
+    assert matrix[0]["status"] == "Abaixo da Meta"
+    assert matrix[0]["status_badge"] == "🟢"
+    assert "Acima da Meta" in matrix[1]["status"]
+    assert matrix[1]["status_badge"] == "🟡"
+
+
 def test_monitor_send_heartbeat_if_due(tmp_path, mock_search_client):
     repo = FlightRepository(tmp_path / "test.db")
     notifier = MagicMock()

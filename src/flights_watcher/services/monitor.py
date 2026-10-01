@@ -132,6 +132,55 @@ class MonitorService:
         parts.append(f"{minutes} minuto(s)")
         return ", ".join(parts)
 
+    def build_routes_matrix(self) -> list[dict]:
+        """Constrói a matriz completa de todas as rotas configuradas com o status atual."""
+        routes = self.load_routes()
+        price_summary = self.repository.get_route_price_summary()
+
+        matrix = []
+        for r in routes:
+            info = price_summary.get(r.id, {})
+            min_price = info.get("min_price")
+            airline = info.get("airline", "-")
+            checks_count = info.get("checks_count", 0)
+
+            if r.return_date:
+                trip_type = "Ida e Volta"
+            elif r.origin == "BSB":
+                trip_type = "Ida"
+            else:
+                trip_type = "Volta"
+
+            if min_price is not None:
+                if min_price <= r.target_price:
+                    status = "Abaixo da Meta"
+                    status_badge = "🟢"
+                else:
+                    status = f"Acima da Meta ({r.currency} {min_price:.2f})"
+                    status_badge = "🟡"
+            else:
+                status = "Aguardando Abertura"
+                status_badge = "⏳"
+
+            matrix.append(
+                {
+                    "id": r.id,
+                    "origin": r.origin,
+                    "destination": r.destination,
+                    "trip_type": trip_type,
+                    "departure_date": r.departure_date,
+                    "return_date": r.return_date,
+                    "target_price": r.target_price,
+                    "min_price": min_price,
+                    "currency": r.currency,
+                    "airline": airline,
+                    "status": status,
+                    "status_badge": status_badge,
+                    "checks_count": checks_count,
+                }
+            )
+        return matrix
+
     def send_heartbeat_if_due(self, force: bool = False) -> bool:
         """Envia relatório periódico de saúde caso o intervalo de dias tenha expirado."""
         now = datetime.now()
@@ -148,6 +197,9 @@ class MonitorService:
 
         stats = self.repository.get_stats()
         stats["uptime"] = self.uptime_str
+        matrix = self.build_routes_matrix()
+        stats["routes_matrix"] = matrix
+        stats["total_configured_routes"] = len(matrix)
 
         sent = self.notifier.send_heartbeat_alert(stats)
         if sent or force:

@@ -104,32 +104,11 @@ def test_alert(
     telegram_notifier = TelegramNotifier()
 
     if is_heartbeat:
-        repo = FlightRepository(settings.DATABASE_PATH)
-        stats = repo.get_stats()
+        service = MonitorService()
+        stats = service.repository.get_stats()
         stats["uptime"] = "7 dia(s), 2 hora(s), 15 minuto(s)"
-        if not stats.get("lowest_prices"):
-            stats["lowest_prices"] = [
-                {
-                    "route_id": "bsb-cgh-20270903",
-                    "origin": "BSB",
-                    "destination": "CGH",
-                    "departure_date": "2027-09-03",
-                    "return_date": "2027-09-06",
-                    "currency": "BRL",
-                    "min_price": 480.0,
-                    "airline": "LATAM Airlines",
-                },
-                {
-                    "route_id": "bsb-gru-20270903",
-                    "origin": "BSB",
-                    "destination": "GRU",
-                    "departure_date": "2027-09-03",
-                    "return_date": "2027-09-07",
-                    "currency": "BRL",
-                    "min_price": 520.0,
-                    "airline": "GOL Linhas Aéreas",
-                },
-            ]
+        stats["routes_matrix"] = service.build_routes_matrix()
+        stats["total_configured_routes"] = len(stats["routes_matrix"])
 
         if channel in ("all", "email"):
             if email_notifier.is_configured:
