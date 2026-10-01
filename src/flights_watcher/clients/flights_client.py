@@ -88,8 +88,11 @@ class FlightSearchClient:
 
     def _to_domain(self, route: RouteConfig, data: dict) -> FlightDeal:
         """Converte o dicionário serializado do fli em entidade FlightDeal."""
-        outbound = data.get("outbound", {})
-        outbound_legs = outbound.get("legs", [])
+        outbound = data.get("outbound")
+        if isinstance(outbound, dict) and "legs" in outbound:
+            outbound_legs = outbound.get("legs", [])
+        else:
+            outbound_legs = data.get("legs", [])
 
         airline_name = "Desconhecida"
         out_dep = ""
