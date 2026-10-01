@@ -118,7 +118,7 @@ class FlightSearchClient:
         if route.return_date:
             search_query += f" returning {route.return_date}"
         encoded_query = urllib.parse.quote(search_query)
-        google_url = f"https://www.google.com/travel/flights?q={encoded_query}"
+        google_url = f"https://www.google.com/travel/flights?q={encoded_query}&hl=pt-BR&gl=BR"
 
         return FlightDeal(
             route_id=route.id,
