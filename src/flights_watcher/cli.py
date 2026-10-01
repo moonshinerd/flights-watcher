@@ -89,10 +89,37 @@ def test_alert(
     channel: str = typer.Option(
         "all", "--channel", "-c", help="Canal de notificação: 'email', 'telegram' ou 'all'"
     ),
+    is_error: bool = typer.Option(
+        False, "--error", "-e", help="Dispara um alerta de teste de FALHA/ERRO em vez de passagem"
+    ),
 ) -> None:
     """Envia um alerta de teste para validar a integração de e-mail ou Telegram."""
     email_notifier = EmailNotifier()
     telegram_notifier = TelegramNotifier()
+
+    if is_error:
+        err_msg = "Simulação de Teste: Falha temporária de conexão com o Google Flights (Timeout após 15s)."
+        err_ctx = "Teste manual de integridade do sistema via CLI"
+        if channel in ("all", "email"):
+            if email_notifier.is_configured:
+                console.print(f"Enviando e-mail de teste de [red]ERRO[/red] para [cyan]{email_notifier.email_to}[/cyan]...")
+                if email_notifier.send_error_alert(err_msg, context=err_ctx):
+                    console.print(f"[bold green]✓ E-mail de erro enviado com sucesso para {email_notifier.email_to}![/bold green]")
+                else:
+                    console.print("[bold red]✗ Falha ao enviar e-mail de erro.[/bold red]")
+            else:
+                console.print("[yellow]⚠ E-mail não configurado no .env.[/yellow]")
+
+        if channel in ("all", "telegram"):
+            if telegram_notifier.is_configured:
+                console.print(f"Enviando Telegram de teste de [red]ERRO[/red] para chat [cyan]{telegram_notifier.chat_id}[/cyan]...")
+                if telegram_notifier.send_error_alert(err_msg, context=err_ctx):
+                    console.print("[bold green]✓ Alerta de erro enviado para o Telegram![/bold green]")
+                else:
+                    console.print("[bold red]✗ Falha ao enviar alerta de erro no Telegram.[/bold red]")
+            elif channel == "telegram":
+                console.print("[bold red]✗ Telegram não configurado no .env.[/bold red]")
+        return
 
     fake_route = RouteConfig(
         id="bsb-cgh-teste",

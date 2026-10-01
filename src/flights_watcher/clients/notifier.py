@@ -17,6 +17,10 @@ class NotifierPort(ABC):
         """Envia alerta de passagem abaixo da meta."""
         pass
 
+    def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
+        """Envia alerta de erro ou falha no monitor."""
+        return False
+
 
 class ConsoleNotifier(NotifierPort):
     """Notificador via saída de terminal (Log/Stdout)."""
@@ -33,6 +37,16 @@ class ConsoleNotifier(NotifierPort):
             f"{f'Volta: {deal.return_date} ({deal.return_departure} -> {deal.return_arrival})\n' if deal.is_round_trip else ''}"
             f"Link: {deal.google_flights_url}\n"
             f"{'='*50}"
+        )
+        return True
+
+    def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
+        ctx = f" [Contexto: {context}]" if context else ""
+        logger.error(
+            f"\n{'!'*50}\n"
+            f"🚨 ALERTA DE ERRO NO MONITOR{ctx}\n"
+            f"{error_message}\n"
+            f"{'!'*50}"
         )
         return True
 
@@ -153,6 +167,64 @@ class EmailNotifier(NotifierPort):
         msg.attach(MIMEText(plain_text, "plain", "utf-8"))
         msg.attach(MIMEText(html_content, "html", "utf-8"))
 
+        return self._send_message(msg, recipient=self.email_to, log_label="Notificação por e-mail")
+
+    def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
+        if not self.is_configured:
+            logger.debug("EmailNotifier não configurado para envio de erros.")
+            return False
+
+        subject = "🚨 [Flights Watcher] Falha Detectada no Monitor 24/7"
+        ctx_plain = f"Contexto: {context}\n\n" if context else ""
+        plain_text = (
+            f"🚨 ALERTA DE ERRO NO FLIGHTS WATCHER\n\n"
+            f"{ctx_plain}"
+            f"Descrição do Erro:\n{error_message}\n\n"
+            f"Para verificar os logs no servidor:\n"
+            f"ssh talos 'journalctl -u flights-watcher -n 50 --no-pager'\n"
+        )
+
+        ctx_html = (
+            f'<div style="background: #f8f9fa; border-left: 4px solid #6c757d; padding: 10px 14px; font-size: 13px; color: #495057; margin-bottom: 16px;"><strong>Contexto:</strong> {context}</div>'
+            if context
+            else ""
+        )
+
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fdf2f2; margin: 0; padding: 20px;">
+  <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 10px; overflow: hidden; border: 1px solid #f5c2c7; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+    <div style="background: #dc3545; color: #ffffff; padding: 18px; text-align: center;">
+      <h2 style="margin: 0; font-size: 20px;">🚨 Falha no Monitor de Passagens</h2>
+    </div>
+    <div style="padding: 24px;">
+      <p style="color: #333; font-size: 15px; margin-top: 0;">O monitor 24/7 encontrou uma instabilidade ou erro inesperado durante a execução:</p>
+      {ctx_html}
+      <div style="background: #fff5f5; border: 1px solid #ffcccc; border-radius: 6px; padding: 14px; font-family: monospace; font-size: 13px; color: #b02a37; white-space: pre-wrap; word-break: break-all;">{error_message}</div>
+      <p style="color: #666; font-size: 13px; margin-top: 20px;">
+        Para checar os logs completos no servidor:
+        <br><code style="background: #f1f3f4; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 6px;">ssh talos "journalctl -u flights-watcher -n 50 --no-pager"</code>
+      </p>
+    </div>
+    <div style="padding: 12px; text-align: center; font-size: 11px; color: #888; background: #fafafa; border-top: 1px solid #f0f0f0;">
+      Enviado automaticamente pelo flights-watcher.
+    </div>
+  </div>
+</body>
+</html>"""
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"Flights Watcher <{self.smtp_user}>"
+        msg["To"] = self.email_to
+
+        msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+        msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+        return self._send_message(msg, recipient=self.email_to, log_label="Alerta de erro por e-mail")
+
+    def _send_message(self, msg: MIMEMultipart, recipient: str, log_label: str) -> bool:
         try:
             if self.smtp_port == 465:
                 with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, timeout=15) as server:
@@ -163,10 +235,10 @@ class EmailNotifier(NotifierPort):
                     server.starttls()
                     server.login(self.smtp_user, self.smtp_password)
                     server.send_message(msg)
-            logger.info(f"Notificação por e-mail enviada com sucesso para {self.email_to}!")
+            logger.info(f"{log_label} enviada com sucesso para {recipient}!")
             return True
         except Exception as e:
-            logger.error(f"Falha ao enviar notificação por e-mail: {e}")
+            logger.error(f"Falha ao enviar {log_label.lower()}: {e}")
             return False
 
 
@@ -209,10 +281,26 @@ class TelegramNotifier(NotifierPort):
         if deal.google_flights_url:
             msg += f"\n🔗 [Abrir no Google Flights]({deal.google_flights_url})\n"
 
+        return self._send_telegram(msg)
+
+    def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
+        if not self.is_configured:
+            return False
+
+        ctx_text = f"📍 *Contexto:* `{context}`\n" if context else ""
+        msg = (
+            f"🚨 *FALHA NO MONITOR DE VOOS!*\n\n"
+            f"{ctx_text}"
+            f"⚠️ *Erro:* ```\n{error_message[:400]}\n```\n"
+            f"Verifique o status do serviço no servidor."
+        )
+        return self._send_telegram(msg)
+
+    def _send_telegram(self, text: str) -> bool:
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         payload = {
             "chat_id": self.chat_id,
-            "text": msg,
+            "text": text,
             "parse_mode": "Markdown",
             "disable_web_page_preview": False,
         }
@@ -221,10 +309,10 @@ class TelegramNotifier(NotifierPort):
             with httpx.Client(timeout=10.0) as client:
                 res = client.post(url, json=payload)
                 res.raise_for_status()
-                logger.info(f"Notificação Telegram enviada com sucesso para chat {self.chat_id}!")
+                logger.info(f"Mensagem Telegram enviada com sucesso para chat {self.chat_id}!")
                 return True
         except Exception as e:
-            logger.error(f"Falha ao enviar notificação no Telegram: {e}")
+            logger.error(f"Falha ao enviar mensagem no Telegram: {e}")
             return False
 
 
@@ -243,4 +331,15 @@ class CompositeNotifier(NotifierPort):
                     success = True
             except Exception as e:
                 logger.error(f"Erro no notificador {type(notifier).__name__}: {e}")
+        return success
+
+    def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
+        success = False
+        for notifier in self.notifiers:
+            try:
+                res = notifier.send_error_alert(error_message, context)
+                if res:
+                    success = True
+            except Exception as e:
+                logger.error(f"Erro ao enviar alerta de erro no {type(notifier).__name__}: {e}")
         return success

@@ -32,6 +32,23 @@ class MonitorService:
             [ConsoleNotifier(), EmailNotifier(), TelegramNotifier()]
         )
         self.routes_file = Path(routes_file or settings.ROUTES_FILE)
+        self._consecutive_errors: int = 0
+        self._last_error_alert_time: float = 0.0
+        self._error_alert_cooldown_seconds: float = 7200.0  # 2 horas
+
+    def _handle_error(self, error: Exception, context: str) -> None:
+        """Registra erro e envia alerta com cooldown para evitar spam."""
+        self._consecutive_errors += 1
+        logger.error(f"Erro no monitor [{context}]: {error}")
+        now = time.time()
+        if now - self._last_error_alert_time >= self._error_alert_cooldown_seconds:
+            error_msg = f"{type(error).__name__}: {str(error)}"
+            full_context = f"{context} (Falhas consecutivas: {self._consecutive_errors})"
+            try:
+                self.notifier.send_error_alert(error_msg, context=full_context)
+                self._last_error_alert_time = now
+            except Exception as notify_err:
+                logger.error(f"Falha ao enviar notificação de erro: {notify_err}")
 
     def load_routes(self) -> list[RouteConfig]:
         """Carrega a lista de rotas a partir do arquivo routes.json."""
@@ -48,7 +65,7 @@ class MonitorService:
             logger.info(f"{len(routes)} rota(s) ativa(s) carregada(s) de {self.routes_file}.")
             return routes
         except Exception as e:
-            logger.error(f"Erro ao ler arquivo de rotas {self.routes_file}: {e}")
+            self._handle_error(e, context=f"Leitura de rotas ({self.routes_file})")
             return []
 
     def _create_example_routes_file(self) -> None:
@@ -101,13 +118,18 @@ class MonitorService:
 
         logger.info(f"Iniciando ciclo de verificação para {len(routes)} rotas...")
         for route in routes:
-            deal = self.check_route(route)
-            if deal:
-                found_deals.append(deal)
+            try:
+                deal = self.check_route(route)
+                if deal:
+                    found_deals.append(deal)
+            except Exception as e:
+                logger.error(f"Erro ao verificar rota {route.id}: {e}")
             # Pequeno intervalo entre pesquisas para cortesia com o servidor
             time.sleep(2)
 
-        logger.info("Ciclo de verificação finalizado.")
+        # Se o ciclo concluiu normalmente, resetamos contador de erros consecutivos
+        self._consecutive_errors = 0
+        logger.info("Ciclo de verificação finalizado com sucesso.")
         return found_deals
 
     def run_forever(self) -> None:
@@ -118,8 +140,11 @@ class MonitorService:
         while True:
             try:
                 self.run_once()
+            except KeyboardInterrupt:
+                logger.warning("Interrupção pelo usuário recebida. Encerrando monitor...")
+                break
             except Exception as e:
-                logger.error(f"Erro inesperado no ciclo de verificação: {e}")
+                self._handle_error(e, context="Loop contínuo 24/7")
 
             sleep_seconds = settings.CHECK_INTERVAL_MINUTES * 60
             logger.info(f"Próxima checagem em {settings.CHECK_INTERVAL_MINUTES} minutos. Aguardando...")

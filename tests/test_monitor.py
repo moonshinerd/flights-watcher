@@ -9,9 +9,14 @@ from flights_watcher.storage.repository import FlightRepository
 class MockNotifier(NotifierPort):
     def __init__(self):
         self.sent_alerts = []
+        self.sent_errors = []
 
     def send_deal_alert(self, route: RouteConfig, deal: FlightDeal) -> bool:
         self.sent_alerts.append((route, deal))
+        return True
+
+    def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
+        self.sent_errors.append((error_message, context))
         return True
 
 
@@ -110,3 +115,22 @@ def test_monitor_service_ignores_deal_above_target(tmp_path, mock_search_client)
     assert len(notifier.sent_alerts) == 0
     # Mas preço registrado no histórico
     assert repo.get_lowest_historical_price(route.id) == 750.0
+
+
+def test_monitor_service_handles_error_and_triggers_alert(tmp_path, mock_search_client):
+    db_file = tmp_path / "test_flights.db"
+    repo = FlightRepository(db_file)
+    notifier = MockNotifier()
+
+    service = MonitorService(
+        search_client=mock_search_client,
+        repository=repo,
+        notifier=notifier,
+    )
+
+    err = ConnectionError("Falha ao comunicar com o servidor")
+    service._handle_error(err, context="Teste de Conectividade")
+
+    assert len(notifier.sent_errors) == 1
+    assert "ConnectionError" in notifier.sent_errors[0][0]
+    assert "Teste de Conectividade" in notifier.sent_errors[0][1]

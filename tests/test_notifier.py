@@ -72,3 +72,22 @@ def test_email_notifier_send_success(mock_smtp_ssl):
     assert success
     mock_server.login.assert_called_once_with("test@example.com", "password123")
     mock_server.send_message.assert_called_once()
+
+
+@patch("smtplib.SMTP_SSL")
+def test_email_notifier_send_error_alert(mock_smtp_ssl):
+    mock_server = MagicMock()
+    mock_smtp_ssl.return_value.__enter__.return_value = mock_server
+
+    notifier = EmailNotifier(
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_user="test@example.com",
+        smtp_password="password123",
+        email_to="recipient@example.com",
+    )
+
+    success = notifier.send_error_alert("Timeout connecting to server", context="Test Error Context")
+    assert success
+    mock_server.login.assert_called_once_with("test@example.com", "password123")
+    mock_server.send_message.assert_called_once()
