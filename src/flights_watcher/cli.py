@@ -92,10 +92,90 @@ def test_alert(
     is_error: bool = typer.Option(
         False, "--error", "-e", help="Dispara um alerta de teste de FALHA/ERRO em vez de passagem"
     ),
+    is_heartbeat: bool = typer.Option(
+        False, "--heartbeat", "-H", help="Dispara um relatório de saúde/heartbeat semanal"
+    ),
+    is_shutdown: bool = typer.Option(
+        False, "--shutdown", "-s", help="Dispara um alerta de encerramento do processo"
+    ),
 ) -> None:
     """Envia um alerta de teste para validar a integração de e-mail ou Telegram."""
     email_notifier = EmailNotifier()
     telegram_notifier = TelegramNotifier()
+
+    if is_heartbeat:
+        repo = FlightRepository(settings.DATABASE_PATH)
+        stats = repo.get_stats()
+        stats["uptime"] = "7 dia(s), 2 hora(s), 15 minuto(s)"
+        if not stats.get("lowest_prices"):
+            stats["lowest_prices"] = [
+                {
+                    "route_id": "bsb-cgh-20270903",
+                    "origin": "BSB",
+                    "destination": "CGH",
+                    "departure_date": "2027-09-03",
+                    "return_date": "2027-09-06",
+                    "currency": "BRL",
+                    "min_price": 480.0,
+                    "airline": "LATAM Airlines",
+                },
+                {
+                    "route_id": "bsb-gru-20270903",
+                    "origin": "BSB",
+                    "destination": "GRU",
+                    "departure_date": "2027-09-03",
+                    "return_date": "2027-09-07",
+                    "currency": "BRL",
+                    "min_price": 520.0,
+                    "airline": "GOL Linhas Aéreas",
+                },
+            ]
+
+        if channel in ("all", "email"):
+            if email_notifier.is_configured:
+                console.print(f"Enviando e-mail de [green]HEARTBEAT[/green] para [cyan]{email_notifier.email_to}[/cyan]...")
+                if email_notifier.send_heartbeat_alert(stats):
+                    console.print(f"[bold green]✓ Relatório de saúde enviado com sucesso para {email_notifier.email_to}![/bold green]")
+                else:
+                    console.print("[bold red]✗ Falha ao enviar relatório de saúde.[/bold red]")
+            else:
+                console.print("[yellow]⚠ E-mail não configurado no .env.[/yellow]")
+
+        if channel in ("all", "telegram"):
+            if telegram_notifier.is_configured:
+                console.print(f"Enviando Telegram de [green]HEARTBEAT[/green] para chat [cyan]{telegram_notifier.chat_id}[/cyan]...")
+                if telegram_notifier.send_heartbeat_alert(stats):
+                    console.print("[bold green]✓ Relatório de saúde enviado para o Telegram![/bold green]")
+                else:
+                    console.print("[bold red]✗ Falha ao enviar relatório no Telegram.[/bold red]")
+            elif channel == "telegram":
+                console.print("[bold red]✗ Telegram não configurado no .env.[/bold red]")
+        return
+
+    if is_shutdown:
+        shut_reason = "Simulação de Teste: Sinal de parada do sistema operacional (SIGTERM)"
+        shut_uptime = "6 dia(s), 23 hora(s), 55 minuto(s)"
+
+        if channel in ("all", "email"):
+            if email_notifier.is_configured:
+                console.print(f"Enviando e-mail de [yellow]SHUTDOWN[/yellow] para [cyan]{email_notifier.email_to}[/cyan]...")
+                if email_notifier.send_shutdown_alert(shut_reason, shut_uptime):
+                    console.print(f"[bold green]✓ Alerta de shutdown enviado com sucesso para {email_notifier.email_to}![/bold green]")
+                else:
+                    console.print("[bold red]✗ Falha ao enviar alerta de shutdown.[/bold red]")
+            else:
+                console.print("[yellow]⚠ E-mail não configurado no .env.[/yellow]")
+
+        if channel in ("all", "telegram"):
+            if telegram_notifier.is_configured:
+                console.print(f"Enviando Telegram de [yellow]SHUTDOWN[/yellow] para chat [cyan]{telegram_notifier.chat_id}[/cyan]...")
+                if telegram_notifier.send_shutdown_alert(shut_reason, shut_uptime):
+                    console.print("[bold green]✓ Alerta de shutdown enviado para o Telegram![/bold green]")
+                else:
+                    console.print("[bold red]✗ Falha ao enviar alerta de shutdown no Telegram.[/bold red]")
+            elif channel == "telegram":
+                console.print("[bold red]✗ Telegram não configurado no .env.[/bold red]")
+        return
 
     if is_error:
         err_msg = "Simulação de Teste: Falha temporária de conexão com o Google Flights (Timeout após 15s)."

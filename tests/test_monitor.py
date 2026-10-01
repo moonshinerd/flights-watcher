@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import json
 import time
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,8 @@ class MockNotifier(NotifierPort):
     def __init__(self):
         self.sent_alerts = []
         self.sent_errors = []
+        self.sent_heartbeats = []
+        self.sent_shutdowns = []
 
     def send_deal_alert(self, route: RouteConfig, deal: FlightDeal) -> bool:
         self.sent_alerts.append((route, deal))
@@ -19,6 +22,14 @@ class MockNotifier(NotifierPort):
 
     def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
         self.sent_errors.append((error_message, context))
+        return True
+
+    def send_heartbeat_alert(self, stats: dict) -> bool:
+        self.sent_heartbeats.append(stats)
+        return True
+
+    def send_shutdown_alert(self, reason: str, uptime_str: str) -> bool:
+        self.sent_shutdowns.append((reason, uptime_str))
         return True
 
 
@@ -223,26 +234,31 @@ def test_handle_error_notifier_exception_does_not_crash(tmp_path, mock_search_cl
 
 
 def test_run_forever_keyboard_interrupt(tmp_path, mock_search_client):
-    service = MonitorService(search_client=mock_search_client)
+    notifier = MockNotifier()
+    service = MonitorService(search_client=mock_search_client, notifier=notifier)
     service.run_once = MagicMock(side_effect=KeyboardInterrupt)
 
     # Executa sem travar ou explodir exceção
     service.run_forever()
     service.run_once.assert_called_once()
+    assert len(notifier.sent_shutdowns) == 1
 
 
 def test_run_forever_sleep_keyboard_interrupt(tmp_path, mock_search_client):
-    service = MonitorService(search_client=mock_search_client)
+    notifier = MockNotifier()
+    service = MonitorService(search_client=mock_search_client, notifier=notifier)
     service.run_once = MagicMock(return_value=[])
 
     with patch("time.sleep", side_effect=KeyboardInterrupt):
         service.run_forever()
 
     service.run_once.assert_called_once()
+    assert len(notifier.sent_shutdowns) == 1
 
 
 def test_run_forever_exception_handled(tmp_path, mock_search_client):
-    service = MonitorService(search_client=mock_search_client)
+    notifier = MockNotifier()
+    service = MonitorService(search_client=mock_search_client, notifier=notifier)
     # Primeiro loop levanta Exception, segundo loop levanta KeyboardInterrupt para parar
     service.run_once = MagicMock(side_effect=[RuntimeError("Erro de loop"), KeyboardInterrupt])
 
@@ -251,3 +267,79 @@ def test_run_forever_exception_handled(tmp_path, mock_search_client):
 
     assert service.run_once.call_count == 2
     assert service._consecutive_errors == 1
+
+
+def test_monitor_uptime_str(tmp_path, mock_search_client):
+    service = MonitorService(search_client=mock_search_client)
+    service._start_time = datetime.now() - timedelta(days=2, hours=3, minutes=15)
+    uptime = service.uptime_str
+    assert "2 dia(s)" in uptime
+    assert "3 hora(s)" in uptime
+    assert "15 minuto(s)" in uptime
+
+
+def test_monitor_send_heartbeat_if_due(tmp_path, mock_search_client):
+    repo = FlightRepository(tmp_path / "test.db")
+    notifier = MagicMock()
+    notifier.send_heartbeat_alert.return_value = True
+
+    service = MonitorService(search_client=mock_search_client, repository=repo, notifier=notifier)
+
+    # 1. Primeira vez sem histórico prévio: envia!
+    assert service.send_heartbeat_if_due() is True
+    assert repo.get_metadata("last_heartbeat_at") is not None
+    notifier.send_heartbeat_alert.assert_called_once()
+
+    # 2. Chamada imediata subsequente: intervalo de 7 dias não expirou -> não envia
+    notifier.send_heartbeat_alert.reset_mock()
+    assert service.send_heartbeat_if_due() is False
+    notifier.send_heartbeat_alert.assert_not_called()
+
+    # 3. Forçado: envia mesmo antes do prazo
+    assert service.send_heartbeat_if_due(force=True) is True
+    notifier.send_heartbeat_alert.assert_called_once()
+
+
+@patch("httpx.Client")
+def test_monitor_ping_healthcheck_configured(mock_client_cls, tmp_path, mock_search_client):
+    mock_client = MagicMock()
+    mock_client_cls.return_value.__enter__.return_value = mock_client
+    mock_res = MagicMock()
+    mock_res.raise_for_status.return_value = None
+    mock_client.get.return_value = mock_res
+
+    service = MonitorService(search_client=mock_search_client)
+    with patch("flights_watcher.services.monitor.settings.HEALTHCHECK_PING_URL", "https://hc-ping.com/fake-uuid"):
+        assert service.ping_healthcheck() is True
+
+    # Teste de falha de conexão no ping
+    mock_client.get.side_effect = RuntimeError("Network error")
+    with patch("flights_watcher.services.monitor.settings.HEALTHCHECK_PING_URL", "https://hc-ping.com/fake-uuid"):
+        assert service.ping_healthcheck() is False
+
+
+def test_monitor_ping_healthcheck_not_configured(tmp_path, mock_search_client):
+    service = MonitorService(search_client=mock_search_client)
+    with patch("flights_watcher.services.monitor.settings.HEALTHCHECK_PING_URL", None):
+        assert service.ping_healthcheck() is False
+
+
+def test_monitor_send_shutdown_alert(tmp_path, mock_search_client):
+    notifier = MagicMock()
+    notifier.send_shutdown_alert.return_value = True
+
+    service = MonitorService(search_client=mock_search_client, notifier=notifier)
+    assert service.send_shutdown_alert("SIGTERM teste") is True
+    notifier.send_shutdown_alert.assert_called_once()
+
+
+def test_monitor_run_forever_fatal_crash_sends_shutdown(tmp_path, mock_search_client):
+    notifier = MagicMock()
+    service = MonitorService(search_client=mock_search_client, notifier=notifier)
+    service.run_once = MagicMock(return_value=[])
+
+    with patch("time.sleep", side_effect=RuntimeError("Fatal sleep error")):
+        with pytest.raises(RuntimeError):
+            service.run_forever()
+
+    notifier.send_shutdown_alert.assert_called_once()

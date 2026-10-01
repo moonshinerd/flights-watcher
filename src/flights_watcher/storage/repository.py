@@ -53,6 +53,14 @@ class FlightRepository:
             )
             cursor.execute(
                 """
+                CREATE TABLE IF NOT EXISTS metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                """
+            )
+            cursor.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_price_history_route
                 ON price_history(route_id, created_at);
                 """
@@ -163,3 +171,63 @@ class FlightRepository:
             if row and row["min_price"] is not None:
                 return float(row["min_price"])
             return None
+
+    def get_metadata(self, key: str) -> str | None:
+        """Obtém um valor de configuração persistente ou timestamp do banco."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM metadata WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row["value"] if row else None
+
+    def set_metadata(self, key: str, value: str) -> None:
+        """Define ou atualiza um valor de configuração persistente no banco."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO metadata (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
+            conn.commit()
+
+    def get_stats(self) -> dict:
+        """Retorna estatísticas consolidadas para relatórios periódicos de saúde."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as count FROM price_history")
+            total_prices = cursor.fetchone()["count"]
+
+            cursor.execute("SELECT COUNT(*) as count FROM notifications")
+            total_notifications = cursor.fetchone()["count"]
+
+            cursor.execute(
+                """
+                SELECT route_id, origin, destination, departure_date, return_date, currency,
+                       MIN(price) as min_price, airline
+                FROM price_history
+                GROUP BY route_id
+                ORDER BY min_price ASC
+                """
+            )
+            lowest_prices = [
+                {
+                    "route_id": row["route_id"],
+                    "origin": row["origin"],
+                    "destination": row["destination"],
+                    "departure_date": row["departure_date"],
+                    "return_date": row["return_date"],
+                    "currency": row["currency"],
+                    "min_price": float(row["min_price"]),
+                    "airline": row["airline"] or "-",
+                }
+                for row in cursor.fetchall()
+            ]
+
+            return {
+                "total_prices": total_prices,
+                "total_notifications": total_notifications,
+                "lowest_prices": lowest_prices,
+            }

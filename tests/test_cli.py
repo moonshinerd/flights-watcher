@@ -269,6 +269,123 @@ def test_cli_search_with_airlines_options(mock_client_cls, mock_deal):
     assert route_arg.exclude_airlines == ["AD"]
 
 
+@patch("flights_watcher.cli.EmailNotifier")
+def test_cli_test_alert_heartbeat_email(mock_email_cls):
+    mock_email = MagicMock()
+    mock_email.is_configured = True
+    mock_email.email_to = "test@example.com"
+    mock_email.send_heartbeat_alert.return_value = True
+    mock_email_cls.return_value = mock_email
+
+    result = runner.invoke(app, ["test-alert", "--channel", "email", "--heartbeat"])
+    assert result.exit_code == 0
+    assert "Relatório de saúde enviado com sucesso" in result.stdout
+    mock_email.send_heartbeat_alert.assert_called_once()
+
+
+@patch("flights_watcher.cli.EmailNotifier")
+def test_cli_test_alert_heartbeat_email_failure(mock_email_cls):
+    mock_email = MagicMock()
+    mock_email.is_configured = True
+    mock_email.email_to = "test@example.com"
+    mock_email.send_heartbeat_alert.return_value = False
+    mock_email_cls.return_value = mock_email
+
+    result = runner.invoke(app, ["test-alert", "--channel", "email", "--heartbeat"])
+    assert result.exit_code == 0
+    assert "Falha ao enviar relatório de saúde" in result.stdout
+
+
+@patch("flights_watcher.cli.EmailNotifier")
+def test_cli_test_alert_heartbeat_email_not_configured(mock_email_cls):
+    mock_email = MagicMock()
+    mock_email.is_configured = False
+    mock_email_cls.return_value = mock_email
+
+    result = runner.invoke(app, ["test-alert", "--channel", "email", "--heartbeat"])
+    assert result.exit_code == 0
+    assert "E-mail não configurado" in result.stdout
+
+
+@patch("flights_watcher.cli.TelegramNotifier")
+def test_cli_test_alert_heartbeat_telegram(mock_telegram_cls):
+    mock_telegram = MagicMock()
+    mock_telegram.is_configured = True
+    mock_telegram.chat_id = "123456"
+    mock_telegram.send_heartbeat_alert.return_value = True
+    mock_telegram_cls.return_value = mock_telegram
+
+    result = runner.invoke(app, ["test-alert", "--channel", "telegram", "--heartbeat"])
+    assert result.exit_code == 0
+    assert "Relatório de saúde enviado para o Telegram" in result.stdout
+
+
+@patch("flights_watcher.cli.TelegramNotifier")
+def test_cli_test_alert_heartbeat_telegram_failure(mock_telegram_cls):
+    mock_telegram = MagicMock()
+    mock_telegram.is_configured = True
+    mock_telegram.chat_id = "123456"
+    mock_telegram.send_heartbeat_alert.return_value = False
+    mock_telegram_cls.return_value = mock_telegram
+
+    result = runner.invoke(app, ["test-alert", "--channel", "telegram", "--heartbeat"])
+    assert result.exit_code == 0
+    assert "Falha ao enviar relatório no Telegram" in result.stdout
+
+
+@patch("flights_watcher.cli.EmailNotifier")
+def test_cli_test_alert_shutdown_email(mock_email_cls):
+    mock_email = MagicMock()
+    mock_email.is_configured = True
+    mock_email.email_to = "test@example.com"
+    mock_email.send_shutdown_alert.return_value = True
+    mock_email_cls.return_value = mock_email
+
+    result = runner.invoke(app, ["test-alert", "--channel", "email", "--shutdown"])
+    assert result.exit_code == 0
+    assert "Alerta de shutdown enviado com sucesso" in result.stdout
+    mock_email.send_shutdown_alert.assert_called_once()
+
+
+@patch("flights_watcher.cli.EmailNotifier")
+def test_cli_test_alert_shutdown_email_failure(mock_email_cls):
+    mock_email = MagicMock()
+    mock_email.is_configured = True
+    mock_email.email_to = "test@example.com"
+    mock_email.send_shutdown_alert.return_value = False
+    mock_email_cls.return_value = mock_email
+
+    result = runner.invoke(app, ["test-alert", "--channel", "email", "--shutdown"])
+    assert result.exit_code == 0
+    assert "Falha ao enviar alerta de shutdown" in result.stdout
+
+
+@patch("flights_watcher.cli.TelegramNotifier")
+def test_cli_test_alert_shutdown_telegram(mock_telegram_cls):
+    mock_telegram = MagicMock()
+    mock_telegram.is_configured = True
+    mock_telegram.chat_id = "123456"
+    mock_telegram.send_shutdown_alert.return_value = True
+    mock_telegram_cls.return_value = mock_telegram
+
+    result = runner.invoke(app, ["test-alert", "--channel", "telegram", "--shutdown"])
+    assert result.exit_code == 0
+    assert "Alerta de shutdown enviado para o Telegram" in result.stdout
+
+
+@patch("flights_watcher.cli.TelegramNotifier")
+def test_cli_test_alert_shutdown_telegram_failure(mock_telegram_cls):
+    mock_telegram = MagicMock()
+    mock_telegram.is_configured = True
+    mock_telegram.chat_id = "123456"
+    mock_telegram.send_shutdown_alert.return_value = False
+    mock_telegram_cls.return_value = mock_telegram
+
+    result = runner.invoke(app, ["test-alert", "--channel", "telegram", "--shutdown"])
+    assert result.exit_code == 0
+    assert "Falha ao enviar alerta de shutdown no Telegram" in result.stdout
+
+
 def test_cli_history_empty(tmp_path):
     with patch("flights_watcher.cli.settings") as mock_settings:
         mock_settings.DATABASE_PATH = tmp_path / "empty.db"

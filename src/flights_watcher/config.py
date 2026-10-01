@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     CHECK_INTERVAL_MINUTES: int = 60
     NOTIFICATION_COOLDOWN_HOURS: int = 12
     DEFAULT_CURRENCY: str = "BRL"
+    HEARTBEAT_INTERVAL_DAYS: int = 7
+    HEALTHCHECK_PING_URL: str | None = None
+    ALERT_ON_SHUTDOWN: bool = True
 
     @property
     def email_user(self) -> str | None:

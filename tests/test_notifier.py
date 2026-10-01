@@ -244,3 +244,138 @@ def test_composite_notifier(sample_route, sample_deal):
 
     n1.send_deal_alert.assert_called_once_with(sample_route, sample_deal)
     n1.send_error_alert.assert_called_once_with("Global crash", "Main")
+
+
+def test_console_notifier_heartbeat_and_shutdown():
+    c = ConsoleNotifier()
+    assert c.send_heartbeat_alert({"uptime": "1d", "total_prices": 5}) is True
+    assert c.send_shutdown_alert("SIGTERM", "1d") is True
+
+
+@patch("smtplib.SMTP_SSL")
+def test_email_notifier_send_heartbeat_alert_success(mock_smtp_ssl_cls):
+    mock_server = MagicMock()
+    mock_smtp_ssl_cls.return_value.__enter__.return_value = mock_server
+
+    email_notif = EmailNotifier(
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_user="test@gmail.com",
+        smtp_password="app-password",
+        email_to="dest@gmail.com",
+    )
+
+    stats = {
+        "uptime": "7 dia(s)",
+        "total_prices": 100,
+        "total_notifications": 2,
+        "lowest_prices": [
+            {
+                "origin": "BSB",
+                "destination": "CGH",
+                "departure_date": "2027-09-03",
+                "return_date": "2027-09-06",
+                "currency": "BRL",
+                "min_price": 480.0,
+                "airline": "LATAM",
+            }
+        ],
+    }
+
+    success = email_notif.send_heartbeat_alert(stats)
+    assert success is True
+    mock_server.send_message.assert_called_once()
+    sent_msg = mock_server.send_message.call_args[0][0]
+    assert "Relatório Semanal de Saúde" in sent_msg["Subject"]
+
+
+def test_email_notifier_send_heartbeat_not_configured():
+    email_notif = EmailNotifier(
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_user=None,
+        smtp_password=None,
+        email_to=None,
+    )
+    assert email_notif.send_heartbeat_alert({}) is False
+
+
+@patch("smtplib.SMTP_SSL")
+def test_email_notifier_send_shutdown_alert_success(mock_smtp_ssl_cls):
+    mock_server = MagicMock()
+    mock_smtp_ssl_cls.return_value.__enter__.return_value = mock_server
+
+    email_notif = EmailNotifier(
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_user="test@gmail.com",
+        smtp_password="app-password",
+        email_to="dest@gmail.com",
+    )
+
+    success = email_notif.send_shutdown_alert("SIGTERM", "7 dia(s)")
+    assert success is True
+    mock_server.send_message.assert_called_once()
+    sent_msg = mock_server.send_message.call_args[0][0]
+    assert "Processo Encerrando" in sent_msg["Subject"]
+
+
+def test_email_notifier_send_shutdown_not_configured():
+    email_notif = EmailNotifier(
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
+        smtp_user=None,
+        smtp_password=None,
+        email_to=None,
+    )
+    assert email_notif.send_shutdown_alert("SIGTERM", "1h") is False
+
+
+@patch("httpx.Client")
+def test_telegram_notifier_send_heartbeat_and_shutdown(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value.__enter__.return_value = mock_client
+    mock_res = MagicMock()
+    mock_res.raise_for_status.return_value = None
+    mock_client.post.return_value = mock_res
+
+    notifier = TelegramNotifier(bot_token="1234:TOKEN", chat_id="999888")
+    assert (
+        notifier.send_heartbeat_alert(
+            {
+                "uptime": "7d",
+                "total_prices": 10,
+                "lowest_prices": [
+                    {
+                        "origin": "BSB",
+                        "destination": "CGH",
+                        "departure_date": "2027-09-03",
+                        "min_price": 500.0,
+                        "currency": "BRL",
+                    }
+                ],
+            }
+        )
+        is True
+    )
+    assert notifier.send_shutdown_alert("SIGINT", "7d") is True
+
+
+def test_telegram_notifier_heartbeat_and_shutdown_unconfigured():
+    notifier = TelegramNotifier(bot_token=None, chat_id=None)
+    assert notifier.send_heartbeat_alert({}) is False
+    assert notifier.send_shutdown_alert("test", "0s") is False
+
+
+def test_composite_notifier_heartbeat_and_shutdown():
+    n1 = MagicMock()
+    n1.send_heartbeat_alert.return_value = True
+    n1.send_shutdown_alert.return_value = True
+
+    n2 = MagicMock()
+    n2.send_heartbeat_alert.side_effect = RuntimeError("n2 err")
+    n2.send_shutdown_alert.side_effect = RuntimeError("n2 err")
+
+    composite = CompositeNotifier([n1, n2])
+    assert composite.send_heartbeat_alert({}) is True
+    assert composite.send_shutdown_alert("SIGTERM", "1d") is True

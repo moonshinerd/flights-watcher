@@ -1,6 +1,10 @@
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
+import signal
+import sys
 import time
+import httpx
 from loguru import logger
 
 from flights_watcher.clients.flights_client import FlightSearchClient
@@ -35,6 +39,7 @@ class MonitorService:
         self._consecutive_errors: int = 0
         self._last_error_alert_time: float = 0.0
         self._error_alert_cooldown_seconds: float = 7200.0  # 2 horas
+        self._start_time: datetime = datetime.now()
 
     def _handle_error(self, error: Exception, context: str) -> None:
         """Registra erro e envia alerta com cooldown para evitar spam."""
@@ -111,6 +116,70 @@ class MonitorService:
 
         return best_deal
 
+    @property
+    def uptime_str(self) -> str:
+        """Formata o tempo decorrido desde a inicialização do serviço."""
+        diff = datetime.now() - self._start_time
+        total_seconds = int(diff.total_seconds())
+        days = total_seconds // 86400
+        hours = (total_seconds % 86400) // 3600
+        minutes = (total_seconds % 3600) // 60
+        parts = []
+        if days > 0:
+            parts.append(f"{days} dia(s)")
+        if hours > 0 or days > 0:
+            parts.append(f"{hours} hora(s)")
+        parts.append(f"{minutes} minuto(s)")
+        return ", ".join(parts)
+
+    def send_heartbeat_if_due(self, force: bool = False) -> bool:
+        """Envia relatório periódico de saúde caso o intervalo de dias tenha expirado."""
+        now = datetime.now()
+        last_heartbeat_str = self.repository.get_metadata("last_heartbeat_at")
+
+        if last_heartbeat_str and not force:
+            try:
+                last_time = datetime.fromisoformat(last_heartbeat_str)
+                interval = timedelta(days=settings.HEARTBEAT_INTERVAL_DAYS)
+                if now - last_time < interval:
+                    return False
+            except Exception as e:
+                logger.warning(f"Erro ao interpretar timestamp de heartbeat anterior: {e}")
+
+        stats = self.repository.get_stats()
+        stats["uptime"] = self.uptime_str
+
+        sent = self.notifier.send_heartbeat_alert(stats)
+        if sent or force:
+            self.repository.set_metadata("last_heartbeat_at", now.isoformat())
+            logger.info("Relatório periódico de saúde (Heartbeat) processado.")
+        return sent
+
+    def ping_healthcheck(self) -> bool:
+        """Envia ping HTTP para monitor externo de Dead Man's Switch (ex: healthchecks.io)."""
+        if not settings.HEALTHCHECK_PING_URL:
+            return False
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.get(settings.HEALTHCHECK_PING_URL)
+                resp.raise_for_status()
+                logger.debug(f"Ping externo de saúde enviado para {settings.HEALTHCHECK_PING_URL}.")
+                return True
+        except Exception as e:
+            logger.warning(f"Falha ao enviar ping de healthcheck externo: {e}")
+            return False
+
+    def send_shutdown_alert(self, reason: str) -> bool:
+        """Envia alerta de emergência comunicando que o processo está sendo finalizado."""
+        if not settings.ALERT_ON_SHUTDOWN:
+            return False
+        try:
+            logger.warning(f"Disparando alerta de shutdown: {reason}")
+            return self.notifier.send_shutdown_alert(reason, self.uptime_str)
+        except Exception as e:
+            logger.error(f"Erro ao disparar alerta de shutdown: {e}")
+            return False
+
     def run_once(self) -> list[FlightDeal]:
         """Executa um ciclo completo de verificação em todas as rotas ativas."""
         routes = self.load_routes()
@@ -129,27 +198,62 @@ class MonitorService:
 
         # Se o ciclo concluiu normalmente, resetamos contador de erros consecutivos
         self._consecutive_errors = 0
+
+        # Verifica e envia o heartbeat se devido (ex: a cada 7 dias)
+        self.send_heartbeat_if_due()
+
+        # Envia ping externo de Dead Man's Switch (se configurado)
+        self.ping_healthcheck()
+
         logger.info("Ciclo de verificação finalizado com sucesso.")
         return found_deals
 
     def run_forever(self) -> None:
         """Executa o loop contínuo 24/7 com intervalo configurável."""
         logger.info(
-            f"Iniciando Flight Monitor 24/7 (Intervalo: a cada {settings.CHECK_INTERVAL_MINUTES} minutos)..."
+            f"Iniciando Flight Monitor 24/7 (Intervalo: a cada {settings.CHECK_INTERVAL_MINUTES} minutos, "
+            f"Heartbeat: a cada {settings.HEARTBEAT_INTERVAL_DAYS} dias)..."
         )
-        while True:
-            try:
-                self.run_once()
-            except KeyboardInterrupt:
-                logger.warning("Interrupção pelo usuário recebida. Encerrando monitor...")
-                break
-            except Exception as e:
-                self._handle_error(e, context="Loop contínuo 24/7")
 
-            sleep_seconds = settings.CHECK_INTERVAL_MINUTES * 60
-            logger.info(f"Próxima checagem em {settings.CHECK_INTERVAL_MINUTES} minutos. Aguardando...")
-            try:
-                time.sleep(sleep_seconds)
-            except KeyboardInterrupt:
-                logger.warning("Interrupção pelo usuário recebida. Encerrando monitor...")
-                break
+        def signal_handler(signum, frame):
+            sig_name = "SIGTERM" if signum == signal.SIGTERM else "SIGINT"
+            logger.warning(f"Sinal {sig_name} recebido. Encerrando monitor...")
+            self.send_shutdown_alert(f"Sinal do sistema operacional ({sig_name})")
+            sys.exit(0)
+
+        # Registra captura de sinais para desligamento / systemctl stop
+        try:
+            signal.signal(signal.SIGTERM, signal_handler)
+            signal.signal(signal.SIGINT, signal_handler)
+        except (ValueError, AttributeError):
+            pass
+
+        try:
+            while True:
+                try:
+                    self.run_once()
+                except KeyboardInterrupt:
+                    logger.warning("Interrupção pelo usuário recebida. Encerrando monitor...")
+                    self.send_shutdown_alert("Interrupção manual (KeyboardInterrupt)")
+                    break
+                except SystemExit:
+                    break
+                except Exception as e:
+                    self._handle_error(e, context="Loop contínuo 24/7")
+
+                sleep_seconds = settings.CHECK_INTERVAL_MINUTES * 60
+                logger.info(
+                    f"Próxima checagem em {settings.CHECK_INTERVAL_MINUTES} minutos. Aguardando..."
+                )
+                try:
+                    time.sleep(sleep_seconds)
+                except KeyboardInterrupt:
+                    logger.warning("Interrupção pelo usuário recebida. Encerrando monitor...")
+                    self.send_shutdown_alert("Interrupção manual (KeyboardInterrupt)")
+                    break
+                except SystemExit:
+                    break
+        except Exception as fatal_e:
+            logger.critical(f"Falha fatal no monitor: {fatal_e}")
+            self.send_shutdown_alert(f"Falha fatal: {type(fatal_e).__name__}: {fatal_e}")
+            raise

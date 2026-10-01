@@ -53,13 +53,23 @@ flights-watcher/
 * Utiliza conexão segura via **Gmail SMTP SSL** (porta 465).
 * **Alerta de Oportunidade:** Exibe card verde com destaque para o preço encontrado, meta estipulada, companhia aérea, escalas, horários de ida/volta e botão direto de compra no Google Flights.
 * **Alerta de Erro:** Caso o monitor sofra falhas repetidas ou exceções não tratadas, envia um e-mail em tom de aviso com os detalhes do erro e o comando `ssh` para depuração no servidor.
+* **Relatório Semanal de Saúde (Heartbeat):** A cada 7 dias (configurável via `HEARTBEAT_INTERVAL_DAYS`), o bot envia um relatório consolidado com uptime, número de checagens executadas e os menores preços registrados por rota para você ter certeza de que o processo segue ativo.
+* **Alerta de Encerramento (Shutdown):** Se o processo sofrer interrupção manual (`SIGINT`), encerramento pelo systemd (`SIGTERM`) ou falha fatal, dispara um e-mail de aviso antes de terminar.
 
-### 2. Telegram Bot (Opcional)
+### 2. Monitoramento de "Queda Total da Máquina" (Dead Man's Switch)
+> **E se o próprio PC morrer (falta de luz, travamento de kernel ou cabo de rede solto)?**
+> Um computador desligado não consegue enviar e-mails de dentro dele mesmo. Para cobrir esse cenário, o Flights Watcher possui integração nativa com o padrão **Dead Man's Switch** (ex: [Healthchecks.io](https://healthchecks.io), 100% gratuito e open-source):
+> 1. Você cria um check gratuito no Healthchecks.io (ex: periodicidade de 1 hora ou 1 dia).
+> 2. Adiciona a URL no `.env`: `HEALTHCHECK_PING_URL=https://hc-ping.com/seu-uuid-aqui`.
+> 3. A cada rodada de checagem, o Flights Watcher envia um ping HTTP leve para essa URL.
+> 4. Se o PC desligar ou a internet cair, o Healthchecks.io nota a ausência do sinal e **ele mesmo** te avisa por e-mail ou Telegram: *"🚨 O servidor talos parou de responder!"*.
+
+### 3. Telegram Bot (Opcional)
 * Envio via Telegram Bot API com formatação Markdown e link direto.
 * Ativado automaticamente caso `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` estejam preenchidos no `.env`.
 
-### 3. Política Anti-Spam (Cooldown Inteligente)
-* O histórico de alertas é registrado no banco de dados SQLite (`flight_monitor.db`).
+### 4. Política Anti-Spam (Cooldown Inteligente)
+* O histórico de alertas é registrado no banco de dados SQLite (`flights_watcher.db`).
 * Se uma passagem continuar abaixo da meta nas checagens seguintes, o alerta só é reenviado se:
   * O preço cair ainda mais (novo menor preço histórico); ou
   * Já tiver passado o tempo de *cooldown* configurado (padrão: 12 horas).
@@ -167,6 +177,12 @@ uv run flights-watcher test-alert --channel email
 
 # Testar alerta de ERRO/FALHA do sistema por e-mail
 uv run flights-watcher test-alert --channel email --error
+
+# Testar relatório semanal de saúde (Heartbeat) por e-mail
+uv run flights-watcher test-alert --channel email --heartbeat
+
+# Testar alerta de encerramento do processo (Shutdown) por e-mail
+uv run flights-watcher test-alert --channel email --shutdown
 ```
 
 ### 2. Checagem Única Imediata

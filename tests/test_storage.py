@@ -90,3 +90,27 @@ def test_should_notify_after_cooldown_expired(temp_repo, sample_deal):
 
     # Com cooldown de 12h, após 15h deve notificar novamente mesmo com o mesmo preço
     assert temp_repo.should_notify(sample_deal, target_price=800.0, cooldown_hours=12) is True
+
+
+def test_metadata_operations(temp_repo):
+    assert temp_repo.get_metadata("test_key") is None
+    temp_repo.set_metadata("test_key", "value_1")
+    assert temp_repo.get_metadata("test_key") == "value_1"
+    temp_repo.set_metadata("test_key", "value_2")
+    assert temp_repo.get_metadata("test_key") == "value_2"
+
+
+def test_get_stats(temp_repo, sample_deal):
+    stats_empty = temp_repo.get_stats()
+    assert stats_empty["total_prices"] == 0
+    assert stats_empty["total_notifications"] == 0
+    assert stats_empty["lowest_prices"] == []
+
+    temp_repo.save_deal(sample_deal)
+    temp_repo.record_notification(sample_deal)
+
+    stats = temp_repo.get_stats()
+    assert stats["total_prices"] == 1
+    assert stats["total_notifications"] == 1
+    assert len(stats["lowest_prices"]) == 1
+    assert stats["lowest_prices"][0]["min_price"] == sample_deal.price

@@ -21,6 +21,14 @@ class NotifierPort(ABC):
         """Envia alerta de erro ou falha no monitor."""
         return False
 
+    def send_heartbeat_alert(self, stats: dict) -> bool:
+        """Envia relatório periódico (ex: a cada 7 dias) informando que o monitor está ativo."""
+        return False
+
+    def send_shutdown_alert(self, reason: str, uptime_str: str) -> bool:
+        """Envia alerta de emergência informando que o processo está sendo finalizado."""
+        return False
+
 
 class ConsoleNotifier(NotifierPort):
     """Notificador via saída de terminal (Log/Stdout)."""
@@ -48,6 +56,17 @@ class ConsoleNotifier(NotifierPort):
             f"{error_message}\n"
             f"{'!'*50}"
         )
+        return True
+
+    def send_heartbeat_alert(self, stats: dict) -> bool:
+        logger.info(
+            f"💚 [Heartbeat] Sistema ativo. Uptime: {stats.get('uptime', 'N/A')}. "
+            f"Cotações registradas: {stats.get('total_prices', 0)}"
+        )
+        return True
+
+    def send_shutdown_alert(self, reason: str, uptime_str: str) -> bool:
+        logger.warning(f"⚠️ [Shutdown] Processo encerrando: {reason}. Uptime: {uptime_str}")
         return True
 
 
@@ -224,6 +243,169 @@ class EmailNotifier(NotifierPort):
 
         return self._send_message(msg, recipient=self.email_to, log_label="Alerta de erro por e-mail")
 
+    def send_heartbeat_alert(self, stats: dict) -> bool:
+        if not self.is_configured:
+            logger.debug("EmailNotifier não configurado para envio de heartbeat.")
+            return False
+
+        uptime = stats.get("uptime", "Ativo")
+        total_prices = stats.get("total_prices", 0)
+        total_notifications = stats.get("total_notifications", 0)
+        lowest_prices = stats.get("lowest_prices", [])
+
+        subject = "💚 [Flights Watcher] Relatório Semanal de Saúde - Sistema 100% Operacional"
+
+        rows_html = ""
+        for lp in lowest_prices:
+            dates = f"{lp['departure_date']}" + (f" ➔ {lp['return_date']}" if lp.get('return_date') else "")
+            rows_html += f"""
+            <tr style="border-bottom: 1px solid #e5e7eb;">
+              <td style="padding: 10px 12px; font-weight: 600; color: #1f2937;">{lp['origin']} ➔ {lp['destination']}</td>
+              <td style="padding: 10px 12px; color: #4b5563; font-size: 13px;">{dates}</td>
+              <td style="padding: 10px 12px; font-weight: 700; color: #059669;">{lp['currency']} {lp['min_price']:.2f}</td>
+              <td style="padding: 10px 12px; color: #6b7280; font-size: 13px;">{lp['airline']}</td>
+            </tr>
+            """
+
+        if not rows_html:
+            rows_html = """
+            <tr>
+              <td colspan="4" style="padding: 16px; text-align: center; color: #6b7280;">Ainda não há cotações salvas no histórico.</td>
+            </tr>
+            """
+
+        plain_text = (
+            f"💚 RELATÓRIO SEMANAL DE SAÚDE - FLIGHTS WATCHER\n\n"
+            f"O monitor 24/7 está rodando normalmente no servidor talos e vigiando suas passagens!\n\n"
+            f"• Uptime: {uptime}\n"
+            f"• Total de cotações gravadas: {total_prices}\n"
+            f"• Total de alertas enviados: {total_notifications}\n"
+            f"• Rotas monitoradas ativas: {len(lowest_prices)}\n\n"
+            f"Para checar os logs completos:\n"
+            f"ssh talos 'journalctl -u flights-watcher -n 50 --no-pager'\n"
+        )
+
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f3f4f6; margin: 0; padding: 20px;">
+  <div style="max-width: 620px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.06); border: 1px solid #e5e7eb;">
+    <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; padding: 24px; text-align: center;">
+      <h2 style="margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.5px;">💚 Monitor 24/7 Ativo e Saudável</h2>
+      <p style="margin: 6px 0 0 0; opacity: 0.92; font-size: 14px;">Relatório Periódico de Integridade do Sistema</p>
+    </div>
+    <div style="padding: 24px;">
+      <p style="color: #374151; font-size: 15px; line-height: 1.5; margin-top: 0;">
+        Olá! Este é o seu relatório semanal automático para confirmar que o <strong>Flights Watcher</strong> continua rodando normalmente no servidor e monitorando os voos para The Town 2027.
+      </p>
+
+      <table style="width: 100%; border-collapse: separate; border-spacing: 10px 0; margin: 20px 0;">
+        <tr>
+          <td style="width: 33%; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; padding: 14px; text-align: center;">
+            <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #065f46;">Tempo Ativo</div>
+            <div style="font-size: 15px; font-weight: 800; color: #047857; margin-top: 4px;">{uptime}</div>
+          </td>
+          <td style="width: 33%; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 14px; text-align: center;">
+            <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #1e40af;">Cotações</div>
+            <div style="font-size: 16px; font-weight: 800; color: #1d4ed8; margin-top: 4px;">{total_prices}</div>
+          </td>
+          <td style="width: 33%; background: #fdf4ff; border: 1px solid #f5d0fe; border-radius: 8px; padding: 14px; text-align: center;">
+            <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #86198f;">Rotas</div>
+            <div style="font-size: 16px; font-weight: 800; color: #a21caf; margin-top: 4px;">{len(lowest_prices)}</div>
+          </td>
+        </tr>
+      </table>
+
+      <h3 style="font-size: 16px; color: #111827; margin: 24px 0 12px 0;">📊 Menores Preços Históricos por Rota</h3>
+      <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; background: #fafafa; border-radius: 8px; overflow: hidden; border: 1px solid #e5e7eb;">
+        <thead>
+          <tr style="background: #f3f4f6; color: #4b5563; font-size: 12px; text-transform: uppercase;">
+            <th style="padding: 10px 12px;">Rota</th>
+            <th style="padding: 10px 12px;">Datas</th>
+            <th style="padding: 10px 12px;">Menor Preço</th>
+            <th style="padding: 10px 12px;">Cia</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows_html}
+        </tbody>
+      </table>
+
+      <div style="margin-top: 24px; padding: 14px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; font-size: 13px; color: #4b5563;">
+        🔍 <strong>Diagnóstico rápido:</strong> Para inspecionar o serviço no servidor talos:
+        <br><code style="background: #e5e7eb; padding: 3px 6px; border-radius: 4px; display: inline-block; margin-top: 6px; font-family: monospace;">ssh talos 'journalctl -u flights-watcher -n 50 --no-pager'</code>
+      </div>
+    </div>
+    <div style="padding: 14px; text-align: center; font-size: 12px; color: #9ca3af; background: #fafafa; border-top: 1px solid #f3f4f6;">
+      Próximo relatório agendado para daqui a 7 dias. Flights Watcher 24/7.
+    </div>
+  </div>
+</body>
+</html>"""
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"Flights Watcher <{self.smtp_user}>"
+        msg["To"] = self.email_to
+
+        msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+        msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+        return self._send_message(msg, recipient=self.email_to, log_label="Relatório de saúde (Heartbeat)")
+
+    def send_shutdown_alert(self, reason: str, uptime_str: str) -> bool:
+        if not self.is_configured:
+            logger.debug("EmailNotifier não configurado para envio de shutdown.")
+            return False
+
+        subject = "⚠️ [Flights Watcher] Processo Encerrando no Servidor"
+        plain_text = (
+            f"⚠️ ALERTA DE ENCERRAMENTO - FLIGHTS WATCHER\n\n"
+            f"O serviço de monitoramento está sendo finalizado ou reiniciado.\n\n"
+            f"• Motivo: {reason}\n"
+            f"• Tempo em atividade (Uptime): {uptime_str}\n\n"
+            f"Para verificar se o systemd já reiniciou o serviço:\n"
+            f"ssh talos 'sudo systemctl status flights-watcher'\n"
+        )
+
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fffbeb; margin: 0; padding: 20px;">
+  <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 10px; overflow: hidden; border: 1px solid #fde68a; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+    <div style="background: #d97706; color: #ffffff; padding: 18px; text-align: center;">
+      <h2 style="margin: 0; font-size: 20px;">⚠️ Processo do Monitor Sendo Finalizado</h2>
+    </div>
+    <div style="padding: 24px;">
+      <p style="color: #333; font-size: 15px; margin-top: 0;">
+        O processo do <strong>Flights Watcher</strong> foi interrompido ou está sendo reiniciado no servidor.
+      </p>
+      <div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 14px; font-size: 14px; color: #92400e; margin: 16px 0;">
+        <strong>Motivo:</strong> {reason}<br>
+        <strong>Uptime acumulado:</strong> {uptime_str}
+      </div>
+      <p style="color: #666; font-size: 13px;">
+        Se o encerramento não foi intencional, o <code>systemd</code> tentará subir o processo novamente em instantes. Para verificar o status atual:
+        <br><code style="background: #f1f3f4; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 6px;">ssh talos "sudo systemctl status flights-watcher"</code>
+      </p>
+    </div>
+    <div style="padding: 12px; text-align: center; font-size: 11px; color: #888; background: #fafafa; border-top: 1px solid #f0f0f0;">
+      Enviado automaticamente pelo flights-watcher.
+    </div>
+  </div>
+</body>
+</html>"""
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"Flights Watcher <{self.smtp_user}>"
+        msg["To"] = self.email_to
+
+        msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+        msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+        return self._send_message(msg, recipient=self.email_to, log_label="Alerta de encerramento (Shutdown)")
+
     def _send_message(self, msg: MIMEMultipart, recipient: str, log_label: str) -> bool:
         try:
             if self.smtp_port == 465:
@@ -296,6 +478,38 @@ class TelegramNotifier(NotifierPort):
         )
         return self._send_telegram(msg)
 
+    def send_heartbeat_alert(self, stats: dict) -> bool:
+        if not self.is_configured:
+            return False
+        uptime = stats.get("uptime", "Ativo")
+        total_prices = stats.get("total_prices", 0)
+        lowest = stats.get("lowest_prices", [])
+        text = (
+            f"💚 *[Flights Watcher] Relatório Semanal de Saúde*\n\n"
+            f"O monitor 24/7 está rodando normalmente no servidor!\n\n"
+            f"⏱ *Uptime:* {uptime}\n"
+            f"📊 *Rotas ativas:* {len(lowest)}\n"
+            f"📈 *Total de cotações:* {total_prices}\n"
+        )
+        if lowest:
+            text += "\n*Menores Preços:* \n"
+            for item in lowest[:5]:
+                ret = f" ➔ {item['return_date']}" if item.get('return_date') else ""
+                text += f"• `{item['origin']} ➔ {item['destination']}` ({item['departure_date']}{ret}): *{item['currency']} {item['min_price']:.2f}*\n"
+        return self._send_telegram(text)
+
+    def send_shutdown_alert(self, reason: str, uptime_str: str) -> bool:
+        if not self.is_configured:
+            return False
+        text = (
+            f"⚠️ *[Flights Watcher] Processo Encerrando*\n\n"
+            f"O monitor foi interrompido ou reiniciado.\n\n"
+            f"🛑 *Motivo:* `{reason}`\n"
+            f"⏱ *Uptime acumulado:* {uptime_str}\n\n"
+            f"Para checar o status:\n`ssh talos 'sudo systemctl status flights-watcher'`"
+        )
+        return self._send_telegram(text)
+
     def _send_telegram(self, text: str) -> bool:
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         payload = {
@@ -342,4 +556,26 @@ class CompositeNotifier(NotifierPort):
                     success = True
             except Exception as e:
                 logger.error(f"Erro ao enviar alerta de erro no {type(notifier).__name__}: {e}")
+        return success
+
+    def send_heartbeat_alert(self, stats: dict) -> bool:
+        success = False
+        for notifier in self.notifiers:
+            try:
+                res = notifier.send_heartbeat_alert(stats)
+                if res:
+                    success = True
+            except Exception as e:
+                logger.error(f"Erro ao enviar heartbeat no {type(notifier).__name__}: {e}")
+        return success
+
+    def send_shutdown_alert(self, reason: str, uptime_str: str) -> bool:
+        success = False
+        for notifier in self.notifiers:
+            try:
+                res = notifier.send_shutdown_alert(reason, uptime_str)
+                if res:
+                    success = True
+            except Exception as e:
+                logger.error(f"Erro ao enviar alerta de shutdown no {type(notifier).__name__}: {e}")
         return success
