@@ -4,6 +4,7 @@ from loguru import logger
 from fli.cli.utils import serialize_flight_result
 from fli.core import (
     build_flight_segments,
+    parse_airlines,
     parse_cabin_class,
     parse_max_stops,
     parse_sort_by,
@@ -33,12 +34,19 @@ class FlightSearchClient:
                 return_date=route.return_date,
             )
 
+            parsed_airlines = parse_airlines(route.airlines) if route.airlines else None
+            parsed_exclude = (
+                parse_airlines(route.exclude_airlines) if route.exclude_airlines else None
+            )
+
             filters = FlightSearchFilters(
                 trip_type=trip_type,
                 passenger_info=PassengerInfo(adults=1),
                 flight_segments=segments,
                 stops=parse_max_stops(route.max_stops),
                 seat_type=parse_cabin_class(route.cabin_class),
+                airlines=parsed_airlines,
+                airlines_exclude=parsed_exclude,
                 sort_by=parse_sort_by("CHEAPEST"),
                 show_all_results=False,
             )

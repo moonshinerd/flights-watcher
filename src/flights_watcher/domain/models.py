@@ -19,6 +19,12 @@ class RouteConfig(BaseModel):
     cabin_class: Literal["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"] = Field(
         default="ECONOMY", description="Classe da cabine"
     )
+    airlines: list[str] | None = Field(
+        default=None, description="Lista de códigos IATA para filtrar (ex: ['G3', 'LA', 'AD'])"
+    )
+    exclude_airlines: list[str] | None = Field(
+        default=None, description="Lista de códigos IATA para excluir (ex: ['AA'])"
+    )
     active: bool = Field(default=True, description="Se a rota está ativa para monitoramento")
 
 

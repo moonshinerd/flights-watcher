@@ -41,6 +41,8 @@ def search(
     return_date: Annotated[str | None, typer.Option("--return", "-r", help="Data de volta YYYY-MM-DD")] = None,
     target_price: Annotated[float, typer.Option("--target", "-t", help="Preço desejado")] = 999999.0,
     currency: Annotated[str, typer.Option("--currency", "-c", help="Moeda (BRL, USD)")] = "BRL",
+    airlines: Annotated[list[str] | None, typer.Option("--airlines", "-a", help="Códigos IATA de companhias para filtrar (ex: G3, LA, AD)")] = None,
+    exclude_airlines: Annotated[list[str] | None, typer.Option("--exclude-airlines", "-A", help="Códigos IATA para excluir")] = None,
 ) -> None:
     """Pesquisa rápida de uma rota avulsa no Google Flights."""
     route = RouteConfig(
@@ -51,6 +53,8 @@ def search(
         return_date=return_date,
         target_price=target_price,
         currency=currency.upper(),
+        airlines=[a.upper() for a in airlines] if airlines else None,
+        exclude_airlines=[a.upper() for a in exclude_airlines] if exclude_airlines else None,
     )
 
     client = FlightSearchClient()
