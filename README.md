@@ -217,12 +217,19 @@ uv run flights-watcher start
 
 ## 🐧 Instalação como Serviço no Linux (`systemd`)
 
-Para manter o monitor rodando de forma ininterrupta, reiniciando sozinho após reboots ou falhas de energia:
+Para manter o monitor rodando de forma ininterrupta 24/7, reiniciando sozinho após reboots ou falhas de energia:
 
-### 1. Criar o arquivo de serviço
-No seu servidor (ex: `talos`), crie o arquivo `/etc/systemd/system/flights-watcher.service`:
+### Opção A: Serviço de Usuário (`systemctl --user`) — *Recomendado (sem necessidade de sudo)*
 
-```ini
+1. **Permitir que os processos do usuário continuem rodando após deslogar:**
+```bash
+loginctl enable-linger $USER
+```
+
+2. **Criar a unidade de serviço do usuário:**
+```bash
+mkdir -p ~/.config/systemd/user
+cat << 'EOF' > ~/.config/systemd/user/flights-watcher.service
 [Unit]
 Description=Flights Watcher 24/7 Price Monitor
 After=network-online.target
@@ -230,39 +237,51 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=victor
 WorkingDirectory=/home/victor/flights-watcher
 ExecStart=/home/victor/.local/bin/uv run flights-watcher start
 Restart=always
 RestartSec=60
 EnvironmentFile=/home/victor/flights-watcher/.env
 
-# Limites de recursos (cortesia com servidor modesto)
+# Limites de recursos para servidor modesto (netbook)
 Nice=10
-MemoryMax=300M
+MemoryMax=350M
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
+EOF
 ```
 
-### 2. Ativar e Iniciar o Serviço
+3. **Ativar e iniciar:**
 ```bash
+systemctl --user daemon-reload
+systemctl --user enable --now flights-watcher.service
+```
+
+4. **Gerenciamento e logs:**
+```bash
+systemctl --user status flights-watcher
+journalctl --user -u flights-watcher -f
+journalctl --user -u flights-watcher -n 50 --no-pager
+systemctl --user restart flights-watcher
+```
+
+---
+
+### Opção B: Serviço do Sistema (`/etc/systemd/system`) — *Requer sudo*
+
+1. Copiar a unidade para o sistema:
+```bash
+sudo cp flights-watcher.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now flights-watcher.service
 ```
 
-### 3. Comandos Úteis de Manutenção
+2. Gerenciamento e logs:
 ```bash
-# Ver status em tempo real
 sudo systemctl status flights-watcher
-
-# Ver logs das checagens
 journalctl -u flights-watcher -f
-
-# Ver últimas 50 linhas de log
 journalctl -u flights-watcher -n 50 --no-pager
-
-# Reiniciar o serviço
 sudo systemctl restart flights-watcher
 ```
 
