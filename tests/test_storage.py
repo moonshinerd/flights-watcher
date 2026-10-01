@@ -31,31 +31,30 @@ def sample_deal():
     )
 
 
-def test_route_config_creation():
-    route = RouteConfig(
-        id="test-1",
-        origin="GRU",
-        destination="MIA",
-        departure_date="2026-11-10",
-        return_date="2026-11-20",
-        target_price=3000.0,
-    )
-    assert route.origin == "GRU"
-    assert route.destination == "MIA"
-    assert route.target_price == 3000.0
-    assert route.active is True
+def test_repository_get_lowest_non_existent(temp_repo):
+    assert temp_repo.get_lowest_historical_price("non-existent-route") is None
 
 
-def test_flight_deal_round_trip(sample_deal):
-    assert sample_deal.is_round_trip is True
-    sample_deal.return_date = None
-    assert sample_deal.is_round_trip is False
-
-
-def test_repository_save_and_history(temp_repo, sample_deal):
+def test_repository_save_and_history_multiple(temp_repo, sample_deal):
+    # Save first deal
     temp_repo.save_deal(sample_deal)
-    lowest = temp_repo.get_lowest_historical_price(sample_deal.route_id)
-    assert lowest == 750.0
+    assert temp_repo.get_lowest_historical_price(sample_deal.route_id) == 750.0
+
+    # Save higher deal -> lowest remains 750.0
+    higher_deal = sample_deal.model_copy(update={"price": 890.0})
+    temp_repo.save_deal(higher_deal)
+    assert temp_repo.get_lowest_historical_price(sample_deal.route_id) == 750.0
+
+    # Save cheaper deal -> lowest becomes 620.0
+    cheaper_deal = sample_deal.model_copy(update={"price": 620.0})
+    temp_repo.save_deal(cheaper_deal)
+    assert temp_repo.get_lowest_historical_price(sample_deal.route_id) == 620.0
+
+    # Different route does not mix
+    other_route_deal = sample_deal.model_copy(update={"route_id": "other-route", "price": 400.0})
+    temp_repo.save_deal(other_route_deal)
+    assert temp_repo.get_lowest_historical_price("other-route") == 400.0
+    assert temp_repo.get_lowest_historical_price(sample_deal.route_id) == 620.0
 
 
 def test_should_notify_logic(temp_repo, sample_deal):
@@ -71,6 +70,23 @@ def test_should_notify_logic(temp_repo, sample_deal):
     # 3. Imediatamente depois com o mesmo preço -> Suprime (cooldown ativo)
     assert temp_repo.should_notify(sample_deal, target_price=800.0) is False
 
-    # 4. Preço caiu ainda mais (ex: 699.0) -> Notifica imediatamente!
+    # 4. Preço caiu ainda mais (ex: 699.0) -> Notifica imediatamente mesmo dentro do cooldown!
     cheaper_deal = sample_deal.model_copy(update={"price": 699.0})
     assert temp_repo.should_notify(cheaper_deal, target_price=800.0) is True
+
+
+def test_should_notify_after_cooldown_expired(temp_repo, sample_deal):
+    temp_repo.save_deal(sample_deal)
+    # Simula gravação de notificação antiga (15 horas atrás)
+    old_time = (datetime.now() - timedelta(hours=15)).strftime("%Y-%m-%d %H:%M:%S")
+    with temp_repo._get_connection() as conn:
+        conn.cursor().execute(
+            """
+            INSERT INTO notifications (route_id, price, currency, notified_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (sample_deal.route_id, sample_deal.price, sample_deal.currency, old_time),
+        )
+
+    # Com cooldown de 12h, após 15h deve notificar novamente mesmo com o mesmo preço
+    assert temp_repo.should_notify(sample_deal, target_price=800.0, cooldown_hours=12) is True

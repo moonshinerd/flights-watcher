@@ -26,3 +26,8 @@ flight-monitor = "flights_watcher.cli:app"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=7.1.0",
+]

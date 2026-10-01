@@ -1,4 +1,6 @@
-from unittest.mock import MagicMock
+import json
+import time
+from unittest.mock import MagicMock, patch
 import pytest
 from flights_watcher.clients.notifier import NotifierPort
 from flights_watcher.domain.models import FlightDeal, RouteConfig
@@ -22,42 +24,47 @@ class MockNotifier(NotifierPort):
 
 @pytest.fixture
 def mock_search_client():
-    client = MagicMock()
-    return client
+    return MagicMock()
 
 
-def test_monitor_service_check_route_triggers_notification(tmp_path, mock_search_client):
+@pytest.fixture
+def sample_route():
+    return RouteConfig(
+        id="bsb-cgh",
+        origin="BSB",
+        destination="CGH",
+        departure_date="2027-09-03",
+        return_date="2027-09-06",
+        target_price=550.0,
+    )
+
+
+@pytest.fixture
+def sample_deal(sample_route):
+    return FlightDeal(
+        route_id=sample_route.id,
+        origin="BSB",
+        destination="CGH",
+        departure_date="2027-09-03",
+        return_date="2027-09-06",
+        price=480.0,
+        currency="BRL",
+        airline="LATAM",
+        stops=0,
+        outbound_departure="08:00",
+        outbound_arrival="09:45",
+        return_departure="18:00",
+        return_arrival="19:45",
+        total_duration_minutes=105,
+    )
+
+
+def test_monitor_service_check_route_triggers_notification(tmp_path, mock_search_client, sample_route, sample_deal):
     db_file = tmp_path / "test_flights.db"
     repo = FlightRepository(db_file)
     notifier = MockNotifier()
 
-    route = RouteConfig(
-        id="test-route",
-        origin="GRU",
-        destination="GIG",
-        departure_date="2026-11-10",
-        return_date="2026-11-17",
-        target_price=900.0,
-    )
-
-    found_deal = FlightDeal(
-        route_id=route.id,
-        origin="GRU",
-        destination="GIG",
-        departure_date="2026-11-10",
-        return_date="2026-11-17",
-        price=820.0,
-        currency="BRL",
-        airline="Azul",
-        stops=0,
-        outbound_departure="2026-11-10T10:00:00",
-        outbound_arrival="2026-11-10T11:00:00",
-        return_departure="2026-11-17T15:00:00",
-        return_arrival="2026-11-17T16:00:00",
-        total_duration_minutes=120,
-    )
-
-    mock_search_client.search_route.return_value = [found_deal]
+    mock_search_client.search_route.return_value = [sample_deal]
 
     service = MonitorService(
         search_client=mock_search_client,
@@ -65,41 +72,19 @@ def test_monitor_service_check_route_triggers_notification(tmp_path, mock_search
         notifier=notifier,
     )
 
-    result = service.check_route(route)
-
-    assert result == found_deal
+    result = service.check_route(sample_route)
+    assert result == sample_deal
     assert len(notifier.sent_alerts) == 1
-    assert notifier.sent_alerts[0][1].price == 820.0
-    assert repo.get_lowest_historical_price(route.id) == 820.0
+    assert notifier.sent_alerts[0][1].price == 480.0
+    assert repo.get_lowest_historical_price(sample_route.id) == 480.0
 
 
-def test_monitor_service_ignores_deal_above_target(tmp_path, mock_search_client):
+def test_monitor_service_ignores_deal_above_target(tmp_path, mock_search_client, sample_route, sample_deal):
     db_file = tmp_path / "test_flights.db"
     repo = FlightRepository(db_file)
     notifier = MockNotifier()
 
-    route = RouteConfig(
-        id="test-route",
-        origin="GRU",
-        destination="GIG",
-        departure_date="2026-11-10",
-        target_price=500.0,
-    )
-
-    expensive_deal = FlightDeal(
-        route_id=route.id,
-        origin="GRU",
-        destination="GIG",
-        departure_date="2026-11-10",
-        price=750.0,
-        currency="BRL",
-        airline="LATAM",
-        stops=0,
-        outbound_departure="2026-11-10T10:00:00",
-        outbound_arrival="2026-11-10T11:00:00",
-        total_duration_minutes=60,
-    )
-
+    expensive_deal = sample_deal.model_copy(update={"price": 600.0})
     mock_search_client.search_route.return_value = [expensive_deal]
 
     service = MonitorService(
@@ -108,19 +93,18 @@ def test_monitor_service_ignores_deal_above_target(tmp_path, mock_search_client)
         notifier=notifier,
     )
 
-    result = service.check_route(route)
-
+    result = service.check_route(sample_route)
     assert result == expensive_deal
-    # Preço 750 > Meta 500 -> Nenhum alerta enviado
     assert len(notifier.sent_alerts) == 0
-    # Mas preço registrado no histórico
-    assert repo.get_lowest_historical_price(route.id) == 750.0
+    assert repo.get_lowest_historical_price(sample_route.id) == 600.0
 
 
-def test_monitor_service_handles_error_and_triggers_alert(tmp_path, mock_search_client):
+def test_monitor_service_check_route_no_deals(tmp_path, mock_search_client, sample_route):
     db_file = tmp_path / "test_flights.db"
     repo = FlightRepository(db_file)
     notifier = MockNotifier()
+
+    mock_search_client.search_route.return_value = []
 
     service = MonitorService(
         search_client=mock_search_client,
@@ -128,9 +112,142 @@ def test_monitor_service_handles_error_and_triggers_alert(tmp_path, mock_search_
         notifier=notifier,
     )
 
-    err = ConnectionError("Falha ao comunicar com o servidor")
-    service._handle_error(err, context="Teste de Conectividade")
+    result = service.check_route(sample_route)
+    assert result is None
+    assert len(notifier.sent_alerts) == 0
 
+
+def test_load_routes_creates_example_when_not_exists(tmp_path, mock_search_client):
+    routes_file = tmp_path / "routes.json"
+    assert not routes_file.exists()
+
+    service = MonitorService(
+        search_client=mock_search_client,
+        routes_file=routes_file,
+    )
+
+    routes = service.load_routes()
+    assert routes_file.exists()
+    assert len(routes) == 1
+    assert routes[0].id == "gru-gig-novembro"
+
+
+def test_load_routes_filters_inactive(tmp_path, mock_search_client):
+    routes_file = tmp_path / "routes.json"
+    routes_data = [
+        {"id": "r1", "origin": "BSB", "destination": "CGH", "departure_date": "2027-09-03", "target_price": 500, "active": True},
+        {"id": "r2", "origin": "BSB", "destination": "GRU", "departure_date": "2027-09-03", "target_price": 500, "active": False},
+    ]
+    with open(routes_file, "w", encoding="utf-8") as f:
+        json.dump(routes_data, f)
+
+    service = MonitorService(search_client=mock_search_client, routes_file=routes_file)
+    routes = service.load_routes()
+    assert len(routes) == 1
+    assert routes[0].id == "r1"
+
+
+def test_load_routes_handles_invalid_json(tmp_path, mock_search_client):
+    routes_file = tmp_path / "routes.json"
+    routes_file.write_text("{invalid json", encoding="utf-8")
+
+    notifier = MockNotifier()
+    service = MonitorService(search_client=mock_search_client, notifier=notifier, routes_file=routes_file)
+    routes = service.load_routes()
+    assert routes == []
     assert len(notifier.sent_errors) == 1
-    assert "ConnectionError" in notifier.sent_errors[0][0]
-    assert "Teste de Conectividade" in notifier.sent_errors[0][1]
+
+
+def test_run_once_with_exception_in_one_route(tmp_path, mock_search_client, sample_route, sample_deal):
+    routes_file = tmp_path / "routes.json"
+    routes_data = [
+        {"id": "r-fail", "origin": "BSB", "destination": "CGH", "departure_date": "2027-09-03", "target_price": 500, "active": True},
+        {"id": "r-ok", "origin": "BSB", "destination": "CGH", "departure_date": "2027-09-03", "target_price": 550, "active": True},
+    ]
+    with open(routes_file, "w", encoding="utf-8") as f:
+        json.dump(routes_data, f)
+
+    def search_side_effect(route):
+        if route.id == "r-fail":
+            raise RuntimeError("API Timeout")
+        return [sample_deal]
+
+    mock_search_client.search_route.side_effect = search_side_effect
+
+    notifier = MockNotifier()
+    service = MonitorService(
+        search_client=mock_search_client,
+        repository=FlightRepository(tmp_path / "test.db"),
+        notifier=notifier,
+        routes_file=routes_file,
+    )
+
+    with patch("time.sleep"):  # Skip 2s delay
+        results = service.run_once()
+
+    assert len(results) == 1
+    assert results[0] == sample_deal
+    assert service._consecutive_errors == 0
+
+
+def test_handle_error_cooldown_throttling(tmp_path, mock_search_client):
+    notifier = MockNotifier()
+    service = MonitorService(search_client=mock_search_client, notifier=notifier)
+    service._error_alert_cooldown_seconds = 100.0
+
+    # 1. Primeiro erro -> Notifica!
+    service._handle_error(RuntimeError("Erro 1"), context="Contexto 1")
+    assert len(notifier.sent_errors) == 1
+    assert service._consecutive_errors == 1
+
+    # 2. Segundo erro logo em seguida -> Suprime notificação
+    service._handle_error(RuntimeError("Erro 2"), context="Contexto 2")
+    assert len(notifier.sent_errors) == 1
+    assert service._consecutive_errors == 2
+
+    # 3. Simula tempo passado além do cooldown -> Notifica novamente!
+    service._last_error_alert_time -= 150.0
+    service._handle_error(RuntimeError("Erro 3"), context="Contexto 3")
+    assert len(notifier.sent_errors) == 2
+    assert service._consecutive_errors == 3
+
+
+def test_handle_error_notifier_exception_does_not_crash(tmp_path, mock_search_client):
+    notifier = MagicMock()
+    notifier.send_error_alert.side_effect = Exception("Notifier failure")
+
+    service = MonitorService(search_client=mock_search_client, notifier=notifier)
+    # Não deve levantar exceção
+    service._handle_error(RuntimeError("Test"), context="Crash Test")
+    assert service._consecutive_errors == 1
+
+
+def test_run_forever_keyboard_interrupt(tmp_path, mock_search_client):
+    service = MonitorService(search_client=mock_search_client)
+    service.run_once = MagicMock(side_effect=KeyboardInterrupt)
+
+    # Executa sem travar ou explodir exceção
+    service.run_forever()
+    service.run_once.assert_called_once()
+
+
+def test_run_forever_sleep_keyboard_interrupt(tmp_path, mock_search_client):
+    service = MonitorService(search_client=mock_search_client)
+    service.run_once = MagicMock(return_value=[])
+
+    with patch("time.sleep", side_effect=KeyboardInterrupt):
+        service.run_forever()
+
+    service.run_once.assert_called_once()
+
+
+def test_run_forever_exception_handled(tmp_path, mock_search_client):
+    service = MonitorService(search_client=mock_search_client)
+    # Primeiro loop levanta Exception, segundo loop levanta KeyboardInterrupt para parar
+    service.run_once = MagicMock(side_effect=[RuntimeError("Erro de loop"), KeyboardInterrupt])
+
+    with patch("time.sleep"):  # Evita atrasos
+        service.run_forever()
+
+    assert service.run_once.call_count == 2
+    assert service._consecutive_errors == 1

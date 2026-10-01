@@ -17,6 +17,8 @@ from flights_watcher.domain.models import FlightDeal, RouteConfig
 
 
 def _encode_varint(value: int) -> bytearray:
+    if value < 0:
+        raise ValueError("Varint value must be non-negative")
     buf = bytearray()
     while True:
         byte = value & 0x7F
