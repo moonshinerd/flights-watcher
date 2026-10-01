@@ -1,3 +1,4 @@
+import base64
 import urllib.parse
 from loguru import logger
 
@@ -13,6 +14,90 @@ from fli.core import (
 from fli.models import FlightSearchFilters, PassengerInfo
 from fli.search import SearchFlights
 from flights_watcher.domain.models import FlightDeal, RouteConfig
+
+
+def _encode_varint(value: int) -> bytearray:
+    buf = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value == 0:
+            buf.append(byte)
+            break
+        buf.append(byte | 0x80)
+    return buf
+
+
+def _encode_tag(field: int, wire_type: int) -> bytearray:
+    return _encode_varint((field << 3) | wire_type)
+
+
+def _encode_string(field: int, s: str) -> bytearray:
+    buf = bytearray()
+    s_bytes = s.encode("utf-8")
+    buf.extend(_encode_tag(field, 2))
+    buf.extend(_encode_varint(len(s_bytes)))
+    buf.extend(s_bytes)
+    return buf
+
+
+def _encode_submessage(field: int, inner: bytes | bytearray) -> bytearray:
+    buf = bytearray()
+    buf.extend(_encode_tag(field, 2))
+    buf.extend(_encode_varint(len(inner)))
+    buf.extend(inner)
+    return buf
+
+
+def _encode_airport(code: str) -> bytearray:
+    return _encode_string(2, code)
+
+
+def _encode_leg(date: str, from_apt: str, to_apt: str) -> bytearray:
+    buf = bytearray()
+    buf.extend(_encode_string(2, date))
+    buf.extend(_encode_submessage(13, _encode_airport(from_apt)))
+    buf.extend(_encode_submessage(14, _encode_airport(to_apt)))
+    return buf
+
+
+def build_canonical_google_flights_url(
+    origin: str,
+    destination: str,
+    departure_date: str,
+    return_date: str | None = None,
+    currency: str = "BRL",
+) -> str:
+    """Gera a URL canônica do Google Flights com protobuf tfs base64."""
+    buf = bytearray()
+    leg1 = _encode_leg(departure_date, origin, destination)
+    buf.extend(_encode_submessage(3, leg1))
+
+    trip_code = 2  # ONE_WAY
+    if return_date:
+        leg2 = _encode_leg(return_date, destination, origin)
+        buf.extend(_encode_submessage(3, leg2))
+        trip_code = 1  # ROUND_TRIP
+
+    # 1 passageiro adulto
+    pax_packed = bytearray()
+    pax_packed.extend(_encode_varint(1))
+    buf.extend(_encode_tag(8, 2))
+    buf.extend(_encode_varint(len(pax_packed)))
+    buf.extend(pax_packed)
+
+    # Assento: Economy (1)
+    buf.extend(_encode_tag(9, 0))
+    buf.extend(_encode_varint(1))
+
+    # Tipo de viagem
+    buf.extend(_encode_tag(19, 0))
+    buf.extend(_encode_varint(trip_code))
+
+    b64 = base64.standard_b64encode(buf).decode("utf-8")
+    return (
+        f"https://www.google.com/travel/flights/search?tfs={b64}&hl=pt-BR&gl=BR&curr={currency}"
+    )
 
 
 class FlightSearchClient:
@@ -113,12 +198,14 @@ class FlightSearchClient:
             ret_dep = ret_legs[0].get("departure_time")
             ret_arr = ret_legs[-1].get("arrival_time")
 
-        # Construir link direto no Google Flights
-        search_query = f"flights from {route.origin} to {route.destination} on {route.departure_date}"
-        if route.return_date:
-            search_query += f" returning {route.return_date}"
-        encoded_query = urllib.parse.quote(search_query)
-        google_url = f"https://www.google.com/travel/flights?q={encoded_query}&hl=pt-BR&gl=BR"
+        # Construir link canônico direto no Google Flights com protobuf tfs
+        google_url = build_canonical_google_flights_url(
+            origin=route.origin,
+            destination=route.destination,
+            departure_date=route.departure_date,
+            return_date=route.return_date,
+            currency=route.currency,
+        )
 
         return FlightDeal(
             route_id=route.id,
