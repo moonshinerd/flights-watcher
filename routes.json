@@ -1,0 +1,14 @@
+[
+  {
+    "id": "gru-gig-novembro",
+    "origin": "GRU",
+    "destination": "GIG",
+    "departure_date": "2026-11-10",
+    "return_date": "2026-11-17",
+    "target_price": 850.0,
+    "currency": "BRL",
+    "max_stops": "ANY",
+    "cabin_class": "ECONOMY",
+    "active": true
+  }
+]
