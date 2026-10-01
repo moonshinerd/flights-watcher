@@ -1,0 +1,20 @@
+[Unit]
+Description=Flights Watcher 24/7 Price Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=victor
+WorkingDirectory=/home/victor/flights-watcher
+ExecStart=/home/victor/.local/bin/uv run flights-watcher start
+Restart=always
+RestartSec=60
+EnvironmentFile=/home/victor/flights-watcher/.env
+
+# Limites de recursos para servidor modesto (netbook)
+Nice=10
+MemoryMax=350M
+
+[Install]
+WantedBy=multi-user.target
