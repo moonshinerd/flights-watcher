@@ -1,9 +1,9 @@
 from unittest.mock import MagicMock
 import pytest
-from flight_monitor.clients.notifier import NotifierPort
-from flight_monitor.domain.models import FlightDeal, RouteConfig
-from flight_monitor.services.monitor import MonitorService
-from flight_monitor.storage.repository import FlightRepository
+from flights_watcher.clients.notifier import NotifierPort
+from flights_watcher.domain.models import FlightDeal, RouteConfig
+from flights_watcher.services.monitor import MonitorService
+from flights_watcher.storage.repository import FlightRepository
 
 
 class MockNotifier(NotifierPort):

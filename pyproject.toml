@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-flight-monitor = "flight_monitor.cli:app"
+flight-monitor = "flights_watcher.cli:app"
 
 [build-system]
 requires = ["hatchling"]

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 import pytest
-from flight_monitor.domain.models import FlightDeal, RouteConfig
-from flight_monitor.storage.repository import FlightRepository
+from flights_watcher.domain.models import FlightDeal, RouteConfig
+from flights_watcher.storage.repository import FlightRepository
 
 
 @pytest.fixture

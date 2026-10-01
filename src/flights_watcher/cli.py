@@ -3,12 +3,12 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from flight_monitor.clients.flights_client import FlightSearchClient
-from flight_monitor.clients.notifier import TelegramNotifier
-from flight_monitor.config import settings
-from flight_monitor.domain.models import FlightDeal, RouteConfig
-from flight_monitor.services.monitor import MonitorService
-from flight_monitor.storage.repository import FlightRepository
+from flights_watcher.clients.flights_client import FlightSearchClient
+from flights_watcher.clients.notifier import TelegramNotifier
+from flights_watcher.config import settings
+from flights_watcher.domain.models import FlightDeal, RouteConfig
+from flights_watcher.services.monitor import MonitorService
+from flights_watcher.storage.repository import FlightRepository
 
 app = typer.Typer(
     name="flight-monitor",

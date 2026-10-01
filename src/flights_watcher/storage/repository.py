@@ -3,13 +3,13 @@ from pathlib import Path
 import sqlite3
 from loguru import logger
 
-from flight_monitor.domain.models import FlightDeal
+from flights_watcher.domain.models import FlightDeal
 
 
 class FlightRepository:
     """Repositório SQLite para histórico de preços e controle de alertas."""
 
-    def __init__(self, db_path: Path | str = "flight_monitor.db") -> None:
+    def __init__(self, db_path: Path | str = "flights_watcher.db") -> None:
         self.db_path = Path(db_path)
         self._init_db()
 

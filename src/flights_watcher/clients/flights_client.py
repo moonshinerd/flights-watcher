@@ -11,7 +11,7 @@ from fli.core import (
 )
 from fli.models import FlightSearchFilters, PassengerInfo
 from fli.search import SearchFlights
-from flight_monitor.domain.models import FlightDeal, RouteConfig
+from flights_watcher.domain.models import FlightDeal, RouteConfig
 
 
 class FlightSearchClient:

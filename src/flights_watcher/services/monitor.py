@@ -3,11 +3,11 @@ from pathlib import Path
 import time
 from loguru import logger
 
-from flight_monitor.clients.flights_client import FlightSearchClient
-from flight_monitor.clients.notifier import CompositeNotifier, ConsoleNotifier, NotifierPort, TelegramNotifier
-from flight_monitor.config import settings
-from flight_monitor.domain.models import FlightDeal, RouteConfig
-from flight_monitor.storage.repository import FlightRepository
+from flights_watcher.clients.flights_client import FlightSearchClient
+from flights_watcher.clients.notifier import CompositeNotifier, ConsoleNotifier, NotifierPort, TelegramNotifier
+from flights_watcher.config import settings
+from flights_watcher.domain.models import FlightDeal, RouteConfig
+from flights_watcher.storage.repository import FlightRepository
 
 
 class MonitorService:

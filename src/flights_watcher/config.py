@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     TELEGRAM_CHAT_ID: str | None = None
 
     # Rotas e Persistência
-    DATABASE_PATH: Path = Path("flight_monitor.db")
+    DATABASE_PATH: Path = Path("flights_watcher.db")
     ROUTES_FILE: Path = Path("routes.json")
 
     # Parâmetros de execução

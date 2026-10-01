@@ -2,8 +2,8 @@ from abc import ABC, abstractmethod
 import httpx
 from loguru import logger
 
-from flight_monitor.config import settings
-from flight_monitor.domain.models import FlightDeal, RouteConfig
+from flights_watcher.config import settings
+from flights_watcher.domain.models import FlightDeal, RouteConfig
 
 
 class NotifierPort(ABC):
