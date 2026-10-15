@@ -17,6 +17,10 @@ class NotifierPort(ABC):
         """Envia alerta de passagem abaixo da meta."""
         pass
 
+    def send_split_deal_alert(self, combo: dict) -> bool:
+        """Envia alerta de combinação de trechos avulsos (Ida + Volta) abaixo da meta."""
+        return False
+
     def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
         """Envia alerta de erro ou falha no monitor."""
         return False
@@ -47,6 +51,21 @@ class ConsoleNotifier(NotifierPort):
             f"{'='*50}"
         )
         return True
+
+    def send_split_deal_alert(self, combo: dict) -> bool:
+        savings_info = f" | Economia vs Pacote: {combo['currency']} {combo['savings']:.2f}" if combo.get('savings') and combo['savings'] > 0 else ""
+        logger.success(
+            f"\n{'='*50}\n"
+            f"🎯 ALERTA DE VIAGEM COMBINADA (TRECHOS AVULSOS)!\n"
+            f"Preço Total: {combo['currency']} {combo['total_price']:.2f} (Meta: {combo['currency']} {combo['target_price']:.2f}{savings_info})\n"
+            f"Ida: {combo['outbound_origin']} ➔ {combo['outbound_destination']} em {combo['departure_date']} ({combo['outbound_airline']}) - {combo['currency']} {combo['outbound_price']:.2f}\n"
+            f"Volta: {combo['inbound_origin']} ➔ {combo['inbound_destination']} em {combo['return_date']} ({combo['inbound_airline']}) - {combo['currency']} {combo['inbound_price']:.2f}\n"
+            f"Link Ida: {combo['outbound_url']}\n"
+            f"Link Volta: {combo['inbound_url']}\n"
+            f"{'='*50}"
+        )
+        return True
+
 
     def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
         ctx = f" [Contexto: {context}]" if context else ""
@@ -188,6 +207,127 @@ class EmailNotifier(NotifierPort):
 
         return self._send_message(msg, recipient=self.email_to, log_label="Notificação por e-mail")
 
+    def send_split_deal_alert(self, combo: dict) -> bool:
+        if not self.is_configured:
+            logger.debug("EmailNotifier não configurado para envio de split deal.")
+            return False
+
+        subject = (
+            f"✈️ Alerta: Ida e Volta Avulsas por {combo['currency']} {combo['total_price']:.2f} "
+            f"(Meta: {combo['currency']} {combo['target_price']:.2f})"
+        )
+
+        savings_plain = (
+            f"Economia: {combo['currency']} {combo['savings']:.2f} mais barato que o pacote fechado!\n"
+            if combo.get('savings') and combo['savings'] > 0
+            else ""
+        )
+
+        plain_text = (
+            f"Alerta de Viagem Combinada (Trechos Avulsos)!\n\n"
+            f"Preço Total: {combo['currency']} {combo['total_price']:.2f} (Meta: {combo['currency']} {combo['target_price']:.2f})\n"
+            f"{savings_plain}\n"
+            f"1. VOO DE IDA:\n"
+            f"Rota: {combo['outbound_origin']} ➔ {combo['outbound_destination']}\n"
+            f"Data: {combo['departure_date']}\n"
+            f"Companhia: {combo['outbound_airline']}\n"
+            f"Preço: {combo['currency']} {combo['outbound_price']:.2f}\n"
+            f"Link: {combo['outbound_url']}\n\n"
+            f"2. VOO DE VOLTA:\n"
+            f"Rota: {combo['inbound_origin']} ➔ {combo['inbound_destination']}\n"
+            f"Data: {combo['return_date']}\n"
+            f"Companhia: {combo['inbound_airline']}\n"
+            f"Preço: {combo['currency']} {combo['inbound_price']:.2f}\n"
+            f"Link: {combo['inbound_url']}\n"
+        )
+
+        savings_banner = ""
+        if combo.get("savings") and combo["savings"] > 0:
+            savings_banner = f"""
+            <div style="background: #e6f4ea; border: 1px solid #ceead6; border-radius: 8px; padding: 12px; margin-top: 12px; font-size: 14px; color: #137333; font-weight: 700;">
+              🔥 Economia de {combo['currency']} {combo['savings']:.2f} em relação ao pacote fechado ({combo['currency']} {combo['round_trip_min_price']:.2f})!
+            </div>
+            """
+
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f6f8; margin: 0; padding: 20px;">
+  <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+    <div style="background: #1a73e8; color: #ffffff; padding: 20px; text-align: center;">
+      <h2 style="margin: 0; font-size: 20px;">✈️ Viagem Avulsa Abaixo da Meta Encontrada!</h2>
+    </div>
+    <div style="padding: 24px;">
+      <div style="background: #e6f4ea; border: 1px solid #ceead6; border-radius: 8px; padding: 16px; text-align: center; margin-bottom: 20px;">
+        <div style="font-size: 28px; font-weight: bold; color: #137333;">{combo['currency']} {combo['total_price']:.2f}</div>
+        <div style="font-size: 13px; color: #5f6368; margin-top: 4px;">Sua meta era {combo['currency']} {combo['target_price']:.2f}</div>
+        {savings_banner}
+      </div>
+
+      <h3 style="font-size: 15px; color: #202124; margin: 18px 0 8px 0;">🛫 1. Trecho de Ida</h3>
+      <table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 12px; background: #f8f9fa; border-radius: 6px; padding: 8px;">
+        <tr style="border-bottom: 1px solid #eee;">
+          <td style="padding: 8px 12px; color: #666;">Rota:</td>
+          <td style="padding: 8px 12px; font-weight: bold; text-align: right;">{combo['outbound_origin']} ➔ {combo['outbound_destination']}</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #eee;">
+          <td style="padding: 8px 12px; color: #666;">Data:</td>
+          <td style="padding: 8px 12px; font-weight: bold; text-align: right;">{combo['departure_date']}</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #eee;">
+          <td style="padding: 8px 12px; color: #666;">Companhia:</td>
+          <td style="padding: 8px 12px; font-weight: bold; text-align: right;">{combo['outbound_airline']}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; color: #666;">Preço:</td>
+          <td style="padding: 8px 12px; font-weight: bold; color: #137333; text-align: right;">{combo['currency']} {combo['outbound_price']:.2f}</td>
+        </tr>
+      </table>
+      <div style="text-align: center; margin-bottom: 20px;">
+        <a href="{combo['outbound_url']}" target="_blank" style="background-color: #1a73e8; color: #ffffff; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 13px; display: inline-block;">1. Comprar Ida no Google Flights ↗</a>
+      </div>
+
+      <h3 style="font-size: 15px; color: #202124; margin: 18px 0 8px 0;">🛬 2. Trecho de Volta</h3>
+      <table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 12px; background: #f8f9fa; border-radius: 6px; padding: 8px;">
+        <tr style="border-bottom: 1px solid #eee;">
+          <td style="padding: 8px 12px; color: #666;">Rota:</td>
+          <td style="padding: 8px 12px; font-weight: bold; text-align: right;">{combo['inbound_origin']} ➔ {combo['inbound_destination']}</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #eee;">
+          <td style="padding: 8px 12px; color: #666;">Data:</td>
+          <td style="padding: 8px 12px; font-weight: bold; text-align: right;">{combo['return_date']}</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #eee;">
+          <td style="padding: 8px 12px; color: #666;">Companhia:</td>
+          <td style="padding: 8px 12px; font-weight: bold; text-align: right;">{combo['inbound_airline']}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; color: #666;">Preço:</td>
+          <td style="padding: 8px 12px; font-weight: bold; color: #137333; text-align: right;">{combo['currency']} {combo['inbound_price']:.2f}</td>
+        </tr>
+      </table>
+      <div style="text-align: center; margin-bottom: 20px;">
+        <a href="{combo['inbound_url']}" target="_blank" style="background-color: #7c3aed; color: #ffffff; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 13px; display: inline-block;">2. Comprar Volta no Google Flights ↗</a>
+      </div>
+    </div>
+    <div style="padding: 14px; text-align: center; font-size: 11px; color: #888; background: #fafafa; border-top: 1px solid #f0f0f0;">
+      Enviado automaticamente pelo flights-watcher 24/7.
+    </div>
+  </div>
+</body>
+</html>"""
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"Flights Watcher <{self.smtp_user}>"
+        msg["To"] = self.email_to
+
+        msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+        msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+        return self._send_message(msg, recipient=self.email_to, log_label="Alerta de viagem avulsa por e-mail")
+
+
     def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
         if not self.is_configured:
             logger.debug("EmailNotifier não configurado para envio de erros.")
@@ -253,9 +393,32 @@ class EmailNotifier(NotifierPort):
         total_notifications = stats.get("total_notifications", 0)
         lowest_prices = stats.get("lowest_prices", [])
         routes_matrix = stats.get("routes_matrix", [])
+        split_combinations = stats.get("split_combinations", [])
         total_routes = stats.get("total_configured_routes", len(routes_matrix) or len(lowest_prices))
 
         subject = "💚 [Flights Watcher] Relatório Semanal de Saúde - Sistema 100% Operacional"
+
+        # Combinações de trechos avulsos (Split-Ticket) agrupadas por par de datas
+        best_date_combos_map: dict[tuple[str, str], dict] = {}
+        for c in split_combinations:
+            key = (c["departure_date"], c["return_date"])
+            if key not in best_date_combos_map:
+                best_date_combos_map[key] = c
+            else:
+                curr = best_date_combos_map[key]
+                if c["total_price"] is not None and (curr["total_price"] is None or c["total_price"] < curr["total_price"]):
+                    best_date_combos_map[key] = c
+
+        best_date_combos = list(best_date_combos_map.values())
+        best_date_combos.sort(
+            key=lambda c: (
+                0 if c["total_price"] is not None else 1,
+                c["total_price"] if c["total_price"] is not None else 999999,
+                c["departure_date"],
+                c["return_date"],
+            )
+        )
+        best_overall_combo = best_date_combos[0] if best_date_combos and best_date_combos[0]["total_price"] is not None else None
 
         if routes_matrix:
             round_trips = [r for r in routes_matrix if r["trip_type"] == "Ida e Volta"]
@@ -267,6 +430,7 @@ class EmailNotifier(NotifierPort):
                 for it in items:
                     dates = f"{it['departure_date']}" + (f" ➔ {it['return_date']}" if it.get('return_date') else "")
                     target_str = f"{it['currency']} {it['target_price']:.2f}"
+                    url = it.get("url", "#")
                     if it['min_price'] is not None:
                         price_str = f"<strong style='color: #059669;'>{it['currency']} {it['min_price']:.2f}</strong>"
                         cia_str = it['airline']
@@ -280,19 +444,92 @@ class EmailNotifier(NotifierPort):
 
                     html += f"""
                     <tr style="border-bottom: 1px solid #f3f4f6;">
-                      <td style="padding: 10px 12px; font-weight: 600; color: #1f2937;">{it['origin']} ➔ {it['destination']}</td>
+                      <td style="padding: 10px 12px; font-weight: 600; color: #1f2937;">
+                        <a href="{url}" target="_blank" style="color: #1a73e8; text-decoration: none; font-weight: 600;">{it['origin']} ➔ {it['destination']} ↗</a>
+                      </td>
                       <td style="padding: 10px 12px; color: #4b5563; font-size: 13px;">{dates}</td>
                       <td style="padding: 10px 12px; color: #4b5563; font-size: 13px;">{target_str}</td>
                       <td style="padding: 10px 12px; font-size: 13px;">{price_str}</td>
                       <td style="padding: 10px 12px; color: #6b7280; font-size: 12px;">{cia_str}</td>
                       <td style="padding: 10px 12px; text-align: center;">{status_badge}</td>
+                      <td style="padding: 8px 12px; text-align: center;">
+                        <a href="{url}" target="_blank" style="background-color: #1a73e8; color: #ffffff; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 11px; font-weight: 600; display: inline-block; white-space: nowrap;">Ver no Google Flights ↗</a>
+                      </td>
                     </tr>
                     """
                 return html
 
+            def render_combo_table_rows(items):
+                html = ""
+                for c in items:
+                    dates = f"{c['departure_date']} ➔ {c['return_date']}"
+                    badge_bg = "#ecfdf5" if "Abaixo" in c['status'] else ("#fffbeb" if "Acima" in c['status'] else "#f3f4f6")
+                    badge_color = "#047857" if "Abaixo" in c['status'] else ("#b45309" if "Acima" in c['status'] else "#6b7280")
+                    status_badge = f"<span style='background: {badge_bg}; color: {badge_color}; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; display: inline-block;'>{c['status_badge']} {c['status']}</span>"
+
+                    if c['total_price'] is not None:
+                        price_str = f"<strong style='color: #059669; font-size: 14px;'>{c['currency']} {c['total_price']:.2f}</strong><br><span style='font-size: 11px; color: #6b7280;'>Meta: {c['currency']} {c['target_price']:.2f}</span>"
+                    else:
+                        price_str = "<span style='color: #9ca3af; font-size: 12px;'>Aguardando</span>"
+
+                    if c.get('savings') and c['savings'] > 0:
+                        vs_pkg = f"<span style='color: #047857; font-weight: 700;'>Economize {c['currency']} {c['savings']:.2f}</span><br><span style='font-size: 11px; color: #6b7280;'>(Pacote: {c['currency']} {c['round_trip_min_price']:.2f})</span>"
+                    elif c.get('round_trip_min_price') is not None:
+                        vs_pkg = f"<span style='font-size: 12px; color: #4b5563;'>Pacote: {c['currency']} {c['round_trip_min_price']:.2f}</span>"
+                    else:
+                        vs_pkg = "<span style='font-size: 12px; color: #9ca3af;'>-</span>"
+
+                    out_info = f"<strong>{c['outbound_origin']} ➔ {c['outbound_destination']}</strong><br><span style='font-size: 11px; color: #6b7280;'>{c['outbound_airline']} ({c['currency']} {c['outbound_price']:.2f})</span>" if c['outbound_price'] is not None else f"{c['outbound_origin']} ➔ {c['outbound_destination']}"
+                    in_info = f"<strong>{c['inbound_origin']} ➔ {c['inbound_destination']}</strong><br><span style='font-size: 11px; color: #6b7280;'>{c['inbound_airline']} ({c['currency']} {c['inbound_price']:.2f})</span>" if c['inbound_price'] is not None else f"{c['inbound_origin']} ➔ {c['inbound_destination']}"
+
+                    html += f"""
+                    <tr style="border-bottom: 1px solid #f3f4f6;">
+                      <td style="padding: 10px 12px; font-weight: 600; color: #1f2937; white-space: nowrap;">{dates}</td>
+                      <td style="padding: 10px 12px; font-size: 13px;">{out_info}</td>
+                      <td style="padding: 10px 12px; font-size: 13px;">{in_info}</td>
+                      <td style="padding: 10px 12px; font-size: 13px;">{price_str}</td>
+                      <td style="padding: 10px 12px; font-size: 12px;">{vs_pkg}</td>
+                      <td style="padding: 10px 12px; text-align: center;">{status_badge}</td>
+                      <td style="padding: 10px 12px; text-align: center; white-space: nowrap;">
+                        <a href="{c['outbound_url']}" target="_blank" style="background-color: #1a73e8; color: #ffffff; padding: 4px 8px; border-radius: 4px; text-decoration: none; font-size: 11px; font-weight: 600; display: inline-block; margin-bottom: 4px;">Ida ↗</a>
+                        <br>
+                        <a href="{c['inbound_url']}" target="_blank" style="background-color: #7c3aed; color: #ffffff; padding: 4px 8px; border-radius: 4px; text-decoration: none; font-size: 11px; font-weight: 600; display: inline-block;">Volta ↗</a>
+                      </td>
+                    </tr>
+                    """
+                return html
+
+            combos_section_html = ""
+            if best_date_combos:
+                combos_section_html = f"""
+                <h3 style="font-size: 15px; color: #111827; margin: 26px 0 10px 0; border-left: 4px solid #10b981; padding-left: 10px;">
+                  ✨ 1. Melhores Combinações Ida + Volta Avulsas (Split-Ticket) — {len(best_date_combos)} Opções de Datas
+                </h3>
+                <div style="overflow-x: auto; margin-bottom: 20px;">
+                  <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; background: #fafafa; border: 1px solid #e5e7eb; border-radius: 8px;">
+                    <thead>
+                      <tr style="background: #f3f4f6; color: #4b5563; font-size: 11px; text-transform: uppercase;">
+                        <th style="padding: 10px 12px;">Datas</th>
+                        <th style="padding: 10px 12px;">Trecho Ida</th>
+                        <th style="padding: 10px 12px;">Trecho Volta</th>
+                        <th style="padding: 10px 12px;">Total Avulso</th>
+                        <th style="padding: 10px 12px;">vs. Pacote</th>
+                        <th style="padding: 10px 12px; text-align: center;">Status</th>
+                        <th style="padding: 10px 12px; text-align: center;">Links</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {render_combo_table_rows(best_date_combos)}
+                    </tbody>
+                  </table>
+                </div>
+                """
+
             body_sections_html = f"""
-            <h3 style="font-size: 15px; color: #111827; margin: 26px 0 10px 0; border-left: 4px solid #10b981; padding-left: 10px;">
-              ✈️ 1. Pacotes Fechados (Ida e Volta) — {len(round_trips)} Rotas (Meta: R$ 550,00)
+            {combos_section_html}
+
+            <h3 style="font-size: 15px; color: #111827; margin: 26px 0 10px 0; border-left: 4px solid #059669; padding-left: 10px;">
+              ✈️ 2. Pacotes Fechados (Ida e Volta) — {len(round_trips)} Rotas
             </h3>
             <div style="overflow-x: auto; margin-bottom: 20px;">
               <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; background: #fafafa; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -304,6 +541,7 @@ class EmailNotifier(NotifierPort):
                     <th style="padding: 10px 12px;">Menor Preço</th>
                     <th style="padding: 10px 12px;">Cia</th>
                     <th style="padding: 10px 12px; text-align: center;">Status</th>
+                    <th style="padding: 10px 12px; text-align: center;">Link</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -313,7 +551,7 @@ class EmailNotifier(NotifierPort):
             </div>
 
             <h3 style="font-size: 15px; color: #111827; margin: 26px 0 10px 0; border-left: 4px solid #3b82f6; padding-left: 10px;">
-              🛫 2. Trechos Avulsos de Ida (BSB ➔ SP) — {len(one_way_out)} Rotas (Meta: R$ 275,00)
+              🛫 3. Trechos Avulsos de Ida (BSB ➔ SP) — {len(one_way_out)} Rotas
             </h3>
             <div style="overflow-x: auto; margin-bottom: 20px;">
               <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; background: #fafafa; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -325,6 +563,7 @@ class EmailNotifier(NotifierPort):
                     <th style="padding: 10px 12px;">Menor Preço</th>
                     <th style="padding: 10px 12px;">Cia</th>
                     <th style="padding: 10px 12px; text-align: center;">Status</th>
+                    <th style="padding: 10px 12px; text-align: center;">Link</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -334,7 +573,7 @@ class EmailNotifier(NotifierPort):
             </div>
 
             <h3 style="font-size: 15px; color: #111827; margin: 26px 0 10px 0; border-left: 4px solid #8b5cf6; padding-left: 10px;">
-              🛬 3. Trechos Avulsos de Volta (SP ➔ BSB) — {len(one_way_in)} Rotas (Meta: R$ 275,00)
+              🛬 4. Trechos Avulsos de Volta (SP ➔ BSB) — {len(one_way_in)} Rotas
             </h3>
             <div style="overflow-x: auto; margin-bottom: 20px;">
               <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; background: #fafafa; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -346,6 +585,7 @@ class EmailNotifier(NotifierPort):
                     <th style="padding: 10px 12px;">Menor Preço</th>
                     <th style="padding: 10px 12px;">Cia</th>
                     <th style="padding: 10px 12px; text-align: center;">Status</th>
+                    <th style="padding: 10px 12px; text-align: center;">Link</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -358,16 +598,22 @@ class EmailNotifier(NotifierPort):
             rows_html = ""
             for lp in lowest_prices:
                 dates = f"{lp['departure_date']}" + (f" ➔ {lp['return_date']}" if lp.get('return_date') else "")
+                url = lp.get("google_flights_url") or "#"
                 rows_html += f"""
                 <tr style="border-bottom: 1px solid #e5e7eb;">
-                  <td style="padding: 10px 12px; font-weight: 600; color: #1f2937;">{lp['origin']} ➔ {lp['destination']}</td>
+                  <td style="padding: 10px 12px; font-weight: 600; color: #1f2937;">
+                    <a href="{url}" target="_blank" style="color: #1a73e8; text-decoration: none;">{lp['origin']} ➔ {lp['destination']} ↗</a>
+                  </td>
                   <td style="padding: 10px 12px; color: #4b5563; font-size: 13px;">{dates}</td>
                   <td style="padding: 10px 12px; font-weight: 700; color: #059669;">{lp['currency']} {lp['min_price']:.2f}</td>
                   <td style="padding: 10px 12px; color: #6b7280; font-size: 13px;">{lp['airline']}</td>
+                  <td style="padding: 8px 12px; text-align: center;">
+                    <a href="{url}" target="_blank" style="background-color: #1a73e8; color: #ffffff; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 11px; font-weight: 600; display: inline-block;">Ver voo ↗</a>
+                  </td>
                 </tr>
                 """
             if not rows_html:
-                rows_html = "<tr><td colspan='4' style='padding: 16px; text-align: center; color: #6b7280;'>Ainda não há cotações salvas no histórico.</td></tr>"
+                rows_html = "<tr><td colspan='5' style='padding: 16px; text-align: center; color: #6b7280;'>Ainda não há cotações salvas no histórico.</td></tr>"
 
             body_sections_html = f"""
             <h3 style="font-size: 16px; color: #111827; margin: 24px 0 12px 0;">📊 Menores Preços Históricos por Rota</h3>
@@ -378,6 +624,7 @@ class EmailNotifier(NotifierPort):
                   <th style="padding: 10px 12px;">Datas</th>
                   <th style="padding: 10px 12px;">Menor Preço</th>
                   <th style="padding: 10px 12px;">Cia</th>
+                  <th style="padding: 10px 12px; text-align: center;">Link</th>
                 </tr>
               </thead>
               <tbody>
@@ -386,22 +633,56 @@ class EmailNotifier(NotifierPort):
             </table>
             """
 
+        best_combo_card = ""
+        if best_overall_combo:
+            savings_tag = ""
+            if best_overall_combo.get("savings") and best_overall_combo["savings"] > 0:
+                savings_tag = f"<span style='background: #d1fae5; color: #065f46; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 4px; margin-left: 8px;'>Economia de {best_overall_combo['currency']} {best_overall_combo['savings']:.2f} vs Pacote Fechado!</span>"
+
+            best_combo_card = f"""
+            <div style="background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%); border: 1px solid #a7f3d0; border-radius: 10px; padding: 16px 20px; margin: 18px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+              <div style="font-size: 12px; font-weight: 700; color: #047857; text-transform: uppercase; letter-spacing: 0.5px;">✨ Menor Viagem Encontrada (Ida + Volta Avulsas)</div>
+              <div style="font-size: 24px; font-weight: 800; color: #065f46; margin: 6px 0;">
+                {best_overall_combo['currency']} {best_overall_combo['total_price']:.2f}
+                {savings_tag}
+              </div>
+              <div style="font-size: 13px; color: #374151; margin-bottom: 12px; line-height: 1.5;">
+                <strong>Ida:</strong> {best_overall_combo['outbound_origin']} ➔ {best_overall_combo['outbound_destination']} ({best_overall_combo['departure_date']} · {best_overall_combo['outbound_airline']} por {best_overall_combo['currency']} {best_overall_combo['outbound_price']:.2f})<br>
+                <strong>Volta:</strong> {best_overall_combo['inbound_origin']} ➔ {best_overall_combo['inbound_destination']} ({best_overall_combo['return_date']} · {best_overall_combo['inbound_airline']} por {best_overall_combo['currency']} {best_overall_combo['inbound_price']:.2f})
+              </div>
+              <div>
+                <a href="{best_overall_combo['outbound_url']}" target="_blank" style="background-color: #1a73e8; color: #ffffff; padding: 8px 14px; border-radius: 6px; text-decoration: none; font-size: 12px; font-weight: 700; display: inline-block; margin-right: 8px;">1. Comprar Ida no Google Flights ↗</a>
+                <a href="{best_overall_combo['inbound_url']}" target="_blank" style="background-color: #7c3aed; color: #ffffff; padding: 8px 14px; border-radius: 6px; text-decoration: none; font-size: 12px; font-weight: 700; display: inline-block;">2. Comprar Volta no Google Flights ↗</a>
+              </div>
+            </div>
+            """
+
+        combo_text = ""
+        if best_overall_combo:
+            combo_text = (
+                f"\n✨ Menor Viagem Encontrada (Ida + Volta Avulsas):\n"
+                f"• Total: {best_overall_combo['currency']} {best_overall_combo['total_price']:.2f} (Meta: {best_overall_combo['currency']} {best_overall_combo['target_price']:.2f})\n"
+                f"• Ida: {best_overall_combo['outbound_origin']} ➔ {best_overall_combo['outbound_destination']} em {best_overall_combo['departure_date']} ({best_overall_combo['outbound_airline']}) - Link: {best_overall_combo['outbound_url']}\n"
+                f"• Volta: {best_overall_combo['inbound_origin']} ➔ {best_overall_combo['inbound_destination']} em {best_overall_combo['return_date']} ({best_overall_combo['inbound_airline']}) - Link: {best_overall_combo['inbound_url']}\n"
+            )
+
         plain_text = (
             f"💚 RELATÓRIO SEMANAL DE SAÚDE - FLIGHTS WATCHER\n\n"
             f"O monitor 24/7 está rodando normalmente no servidor talos e vigiando suas passagens!\n\n"
             f"• Uptime: {uptime}\n"
             f"• Total de cotações gravadas: {total_prices}\n"
             f"• Total de alertas enviados: {total_notifications}\n"
-            f"• Rotas configuradas ativas: {total_routes}\n\n"
+            f"• Rotas configuradas ativas: {total_routes}\n"
+            f"{combo_text}\n"
             f"Para checar os logs completos:\n"
-            f"ssh talos 'journalctl -u flights-watcher -n 50 --no-pager'\n"
+            f"ssh talos 'journalctl --user -u flights-watcher -n 50 --no-pager'\n"
         )
 
         html_content = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f3f4f6; margin: 0; padding: 20px;">
-  <div style="max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.06); border: 1px solid #e5e7eb;">
+  <div style="max-width: 720px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.06); border: 1px solid #e5e7eb;">
     <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; padding: 24px; text-align: center;">
       <h2 style="margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.5px;">💚 Monitor 24/7 Ativo e Saudável</h2>
       <p style="margin: 6px 0 0 0; opacity: 0.92; font-size: 14px;">Relatório Periódico de Integridade & Matriz de Rotas</p>
@@ -428,11 +709,13 @@ class EmailNotifier(NotifierPort):
         </tr>
       </table>
 
+      {best_combo_card}
+
       {body_sections_html}
 
       <div style="margin-top: 24px; padding: 14px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; font-size: 13px; color: #4b5563;">
         🔍 <strong>Diagnóstico rápido:</strong> Para inspecionar o serviço no servidor talos:
-        <br><code style="background: #e5e7eb; padding: 3px 6px; border-radius: 4px; display: inline-block; margin-top: 6px; font-family: monospace;">ssh talos 'journalctl -u flights-watcher -n 50 --no-pager'</code>
+        <br><code style="background: #e5e7eb; padding: 3px 6px; border-radius: 4px; display: inline-block; margin-top: 6px; font-family: monospace;">ssh talos 'journalctl --user -u flights-watcher -n 50 --no-pager'</code>
       </div>
     </div>
     <div style="padding: 14px; text-align: center; font-size: 12px; color: #9ca3af; background: #fafafa; border-top: 1px solid #f3f4f6;">
@@ -451,6 +734,7 @@ class EmailNotifier(NotifierPort):
         msg.attach(MIMEText(html_content, "html", "utf-8"))
 
         return self._send_message(msg, recipient=self.email_to, log_label="Relatório de saúde (Heartbeat)")
+
 
     def send_shutdown_alert(self, reason: str, uptime_str: str) -> bool:
         if not self.is_configured:
@@ -564,6 +848,32 @@ class TelegramNotifier(NotifierPort):
 
         return self._send_telegram(msg)
 
+    def send_split_deal_alert(self, combo: dict) -> bool:
+        if not self.is_configured:
+            return False
+
+        savings_text = ""
+        if combo.get("savings") and combo["savings"] > 0:
+            savings_text = f"🔥 *Economia:* `{combo['currency']} {combo['savings']:.2f}` mais barato que o pacote fechado!\n\n"
+
+        msg = (
+            f"✈️ *ALERTA: VIAGEM COMBINADA (TRECHOS AVULSOS)!*\n\n"
+            f"💰 *Preço Total Combinado:* `{combo['currency']} {combo['total_price']:.2f}`\n"
+            f"🎯 *Sua Meta:* `{combo['currency']} {combo['target_price']:.2f}`\n"
+            f"{savings_text}"
+            f"🛫 *Trecho Ida:*\n"
+            f"📍 `{combo['outbound_origin']} ➔ {combo['outbound_destination']}`\n"
+            f"📅 `{combo['departure_date']}` | 🏢 {combo['outbound_airline']}\n"
+            f"💵 `{combo['currency']} {combo['outbound_price']:.2f}`\n"
+            f"🔗 [Comprar Ida no Google Flights]({combo['outbound_url']})\n\n"
+            f"🛬 *Trecho Volta:*\n"
+            f"📍 `{combo['inbound_origin']} ➔ {combo['inbound_destination']}`\n"
+            f"📅 `{combo['return_date']}` | 🏢 {combo['inbound_airline']}\n"
+            f"💵 `{combo['currency']} {combo['inbound_price']:.2f}`\n"
+            f"🔗 [Comprar Volta no Google Flights]({combo['inbound_url']})\n"
+        )
+        return self._send_telegram(msg)
+
     def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
         if not self.is_configured:
             return False
@@ -583,6 +893,9 @@ class TelegramNotifier(NotifierPort):
         uptime = stats.get("uptime", "Ativo")
         total_prices = stats.get("total_prices", 0)
         lowest = stats.get("lowest_prices", [])
+        split_combos = stats.get("split_combinations", [])
+        best_combo = next((c for c in split_combos if c.get("total_price") is not None), None)
+
         text = (
             f"💚 *[Flights Watcher] Relatório Semanal de Saúde*\n\n"
             f"O monitor 24/7 está rodando normalmente no servidor!\n\n"
@@ -590,11 +903,21 @@ class TelegramNotifier(NotifierPort):
             f"📊 *Rotas ativas:* {len(lowest)}\n"
             f"📈 *Total de cotações:* {total_prices}\n"
         )
+        if best_combo:
+            savings_info = f" (Economia: *{best_combo['currency']} {best_combo['savings']:.2f}*)" if best_combo.get('savings') and best_combo['savings'] > 0 else ""
+            text += (
+                f"\n✨ *Menor Viagem (Ida + Volta Avulsas):*\n"
+                f"• `{best_combo['outbound_origin']} ➔ {best_combo['outbound_destination']}` ({best_combo['departure_date']}) + "
+                f"`{best_combo['inbound_origin']} ➔ {best_combo['inbound_destination']}` ({best_combo['return_date']})\n"
+                f"• Total: *{best_combo['currency']} {best_combo['total_price']:.2f}*{savings_info}\n"
+                f"• 🔗 [Comprar Ida]({best_combo['outbound_url']}) | [Comprar Volta]({best_combo['inbound_url']})\n"
+            )
         if lowest:
-            text += "\n*Menores Preços:* \n"
+            text += "\n*Menores Preços por Rota:* \n"
             for item in lowest[:5]:
                 ret = f" ➔ {item['return_date']}" if item.get('return_date') else ""
-                text += f"• `{item['origin']} ➔ {item['destination']}` ({item['departure_date']}{ret}): *{item['currency']} {item['min_price']:.2f}*\n"
+                url_link = f" [🔗]({item['google_flights_url']})" if item.get('google_flights_url') else ""
+                text += f"• `{item['origin']} ➔ {item['destination']}` ({item['departure_date']}{ret}): *{item['currency']} {item['min_price']:.2f}*{url_link}\n"
         return self._send_telegram(text)
 
     def send_shutdown_alert(self, reason: str, uptime_str: str) -> bool:
@@ -605,7 +928,7 @@ class TelegramNotifier(NotifierPort):
             f"O monitor foi interrompido ou reiniciado.\n\n"
             f"🛑 *Motivo:* `{reason}`\n"
             f"⏱ *Uptime acumulado:* {uptime_str}\n\n"
-            f"Para checar o status:\n`ssh talos 'sudo systemctl status flights-watcher'`"
+            f"Para checar o status:\n`ssh talos 'journalctl --user -u flights-watcher -n 50 --no-pager'`"
         )
         return self._send_telegram(text)
 
@@ -646,6 +969,17 @@ class CompositeNotifier(NotifierPort):
                 logger.error(f"Erro no notificador {type(notifier).__name__}: {e}")
         return success
 
+    def send_split_deal_alert(self, combo: dict) -> bool:
+        success = False
+        for notifier in self.notifiers:
+            try:
+                res = notifier.send_split_deal_alert(combo)
+                if res:
+                    success = True
+            except Exception as e:
+                logger.error(f"Erro ao enviar alerta de split deal no {type(notifier).__name__}: {e}")
+        return success
+
     def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
         success = False
         for notifier in self.notifiers:
@@ -678,3 +1012,4 @@ class CompositeNotifier(NotifierPort):
             except Exception as e:
                 logger.error(f"Erro ao enviar alerta de shutdown no {type(notifier).__name__}: {e}")
         return success
+

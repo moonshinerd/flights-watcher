@@ -125,3 +125,36 @@ def test_get_route_price_summary(temp_repo, sample_deal):
     assert sample_deal.route_id in summary
     assert summary[sample_deal.route_id]["min_price"] == sample_deal.price
     assert summary[sample_deal.route_id]["checks_count"] == 1
+    assert summary[sample_deal.route_id]["google_flights_url"] == sample_deal.google_flights_url
+
+
+def test_combo_notification_logic(temp_repo):
+    combo_id = "combo:bsb-gru-ida+gru-bsb-volta"
+    target = 600.0
+
+    # 1. Acima da meta -> não notifica
+    assert temp_repo.should_notify_combo(combo_id, total_price=650.0, target_price=target) is False
+
+    # 2. Abaixo da meta e nunca notificado -> notifica
+    assert temp_repo.should_notify_combo(combo_id, total_price=580.0, target_price=target) is True
+
+    # Registra notificação
+    temp_repo.record_combo_notification(combo_id, total_price=580.0)
+
+    # 3. Imediatamente com mesmo preço -> suprime
+    assert temp_repo.should_notify_combo(combo_id, total_price=580.0, target_price=target) is False
+
+    # 4. Preço caiu ainda mais -> notifica mesmo dentro do cooldown
+    assert temp_repo.should_notify_combo(combo_id, total_price=550.0, target_price=target) is True
+
+    # 5. Cooldown expirado -> notifica
+    old_time = (datetime.now() - timedelta(hours=15)).strftime("%Y-%m-%d %H:%M:%S")
+    with temp_repo._get_connection() as conn:
+        conn.cursor().execute(
+            """
+            UPDATE notifications SET notified_at = ? WHERE route_id = ?
+            """,
+            (old_time, combo_id),
+        )
+    assert temp_repo.should_notify_combo(combo_id, total_price=580.0, target_price=target, cooldown_hours=12) is True
+

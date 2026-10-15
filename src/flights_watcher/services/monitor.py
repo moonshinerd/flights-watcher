@@ -7,7 +7,10 @@ import time
 import httpx
 from loguru import logger
 
-from flights_watcher.clients.flights_client import FlightSearchClient
+from flights_watcher.clients.flights_client import (
+    FlightSearchClient,
+    build_canonical_google_flights_url,
+)
 from flights_watcher.clients.notifier import (
     CompositeNotifier,
     ConsoleNotifier,
@@ -18,6 +21,24 @@ from flights_watcher.clients.notifier import (
 from flights_watcher.config import settings
 from flights_watcher.domain.models import FlightDeal, RouteConfig
 from flights_watcher.storage.repository import FlightRepository
+
+METRO_AREAS: dict[str, set[str]] = {
+    "SAO": {"CGH", "GRU", "VCP"},
+    "RIO": {"SDU", "GIG"},
+    "BH": {"CNF", "PLU"},
+    "BSB": {"BSB"},
+}
+
+
+def are_airports_co_located(apt1: str, apt2: str) -> bool:
+    """Verifica se dois aeroportos atendem à mesma região metropolitana."""
+    if apt1 == apt2:
+        return True
+    for group in METRO_AREAS.values():
+        if apt1 in group and apt2 in group:
+            return True
+    return False
+
 
 
 class MonitorService:
@@ -162,6 +183,14 @@ class MonitorService:
                 status = "Aguardando Abertura"
                 status_badge = "⏳"
 
+            url = info.get("google_flights_url") or build_canonical_google_flights_url(
+                origin=r.origin,
+                destination=r.destination,
+                departure_date=r.departure_date,
+                return_date=r.return_date,
+                currency=r.currency,
+            )
+
             matrix.append(
                 {
                     "id": r.id,
@@ -177,9 +206,151 @@ class MonitorService:
                     "status": status,
                     "status_badge": status_badge,
                     "checks_count": checks_count,
+                    "url": url,
                 }
             )
         return matrix
+
+    def build_split_combinations(self) -> list[dict]:
+        """Calcula combinações de trechos avulsos (Ida + Volta) e compara com pacotes fechados."""
+        routes = self.load_routes()
+        price_summary = self.repository.get_route_price_summary()
+
+        outbound_routes = [r for r in routes if r.return_date is None and r.origin == "BSB"]
+        inbound_routes = [r for r in routes if r.return_date is None and r.destination == "BSB"]
+        round_trip_routes = [r for r in routes if r.return_date is not None]
+
+        # Menor preço de pacote fechado por par de datas
+        rt_by_dates: dict[tuple[str, str], float] = {}
+        for r in round_trip_routes:
+            p = price_summary.get(r.id, {}).get("min_price")
+            if p is not None:
+                key = (r.departure_date, r.return_date)
+                if key not in rt_by_dates or p < rt_by_dates[key]:
+                    rt_by_dates[key] = p
+
+        combos = []
+        for r_out in outbound_routes:
+            for r_in in inbound_routes:
+                if r_in.departure_date < r_out.departure_date:
+                    continue
+                if not are_airports_co_located(r_out.destination, r_in.origin):
+                    continue
+
+                info_out = price_summary.get(r_out.id, {})
+                info_in = price_summary.get(r_in.id, {})
+
+                price_out = info_out.get("min_price")
+                price_in = info_in.get("min_price")
+
+                airline_out = info_out.get("airline", "-")
+                airline_in = info_in.get("airline", "-")
+
+                url_out = info_out.get("google_flights_url") or build_canonical_google_flights_url(
+                    origin=r_out.origin,
+                    destination=r_out.destination,
+                    departure_date=r_out.departure_date,
+                    return_date=None,
+                    currency=r_out.currency,
+                )
+                url_in = info_in.get("google_flights_url") or build_canonical_google_flights_url(
+                    origin=r_in.origin,
+                    destination=r_in.destination,
+                    departure_date=r_in.departure_date,
+                    return_date=None,
+                    currency=r_in.currency,
+                )
+
+                target_combined = r_out.target_price + r_in.target_price
+                currency = r_out.currency
+                key_dates = (r_out.departure_date, r_in.departure_date)
+                rt_price = rt_by_dates.get(key_dates)
+
+                if price_out is not None and price_in is not None:
+                    total_price = round(price_out + price_in, 2)
+                    savings = round(rt_price - total_price, 2) if rt_price is not None else None
+                    if total_price <= target_combined:
+                        status = "Abaixo da Meta"
+                        status_badge = "🟢"
+                    else:
+                        status = f"Acima da Meta ({currency} {total_price:.2f})"
+                        status_badge = "🟡"
+                else:
+                    total_price = None
+                    savings = None
+                    status = "Aguardando Abertura"
+                    status_badge = "⏳"
+
+                combos.append(
+                    {
+                        "id": f"combo:{r_out.id}+{r_in.id}",
+                        "departure_date": r_out.departure_date,
+                        "return_date": r_in.departure_date,
+                        "outbound_id": r_out.id,
+                        "inbound_id": r_in.id,
+                        "outbound_origin": r_out.origin,
+                        "outbound_destination": r_out.destination,
+                        "outbound_price": price_out,
+                        "outbound_airline": airline_out,
+                        "outbound_url": url_out,
+                        "inbound_origin": r_in.origin,
+                        "inbound_destination": r_in.destination,
+                        "inbound_price": price_in,
+                        "inbound_airline": airline_in,
+                        "inbound_url": url_in,
+                        "total_price": total_price,
+                        "target_price": target_combined,
+                        "currency": currency,
+                        "round_trip_min_price": rt_price,
+                        "savings": savings,
+                        "status": status,
+                        "status_badge": status_badge,
+                    }
+                )
+
+        combos.sort(
+            key=lambda c: (
+                0 if c["total_price"] is not None else 1,
+                c["total_price"] if c["total_price"] is not None else 999999,
+                c["departure_date"],
+                c["return_date"],
+            )
+        )
+        return combos
+
+    def check_split_combinations(self) -> list[dict]:
+        """Avalia combinações válidas de ida avulsa + volta avulsa e dispara alerta se atingir a meta."""
+        combos = self.build_split_combinations()
+        alerted_combos = []
+
+        for combo in combos:
+            total_price = combo.get("total_price")
+            target_price = combo.get("target_price")
+            if total_price is None or target_price is None:
+                continue
+
+            combo_id = combo["id"]
+            if self.repository.should_notify_combo(
+                combo_id=combo_id,
+                total_price=total_price,
+                target_price=target_price,
+                cooldown_hours=settings.NOTIFICATION_COOLDOWN_HOURS,
+            ):
+                logger.info(
+                    f"Oferta de trechos avulsos combinados encontrada: {combo['outbound_origin']} ➔ {combo['outbound_destination']} "
+                    f"({combo['departure_date']}) + {combo['inbound_origin']} ➔ {combo['inbound_destination']} "
+                    f"({combo['return_date']}) por {combo['currency']} {total_price:.2f} <= {target_price:.2f}!"
+                )
+                notified = self.notifier.send_split_deal_alert(combo)
+                if notified:
+                    self.repository.record_combo_notification(
+                        combo_id=combo_id,
+                        total_price=total_price,
+                        currency=combo.get("currency", "BRL"),
+                    )
+                    alerted_combos.append(combo)
+
+        return alerted_combos
 
     def send_heartbeat_if_due(self, force: bool = False) -> bool:
         """Envia relatório periódico de saúde caso o intervalo de dias tenha expirado."""
@@ -200,6 +371,7 @@ class MonitorService:
         matrix = self.build_routes_matrix()
         stats["routes_matrix"] = matrix
         stats["total_configured_routes"] = len(matrix)
+        stats["split_combinations"] = self.build_split_combinations()
 
         sent = self.notifier.send_heartbeat_alert(stats)
         if sent or force:
@@ -250,6 +422,12 @@ class MonitorService:
 
         # Se o ciclo concluiu normalmente, resetamos contador de erros consecutivos
         self._consecutive_errors = 0
+
+        # Avalia combinações de trechos avulsos (Split-Ticket) para a meta de ida e volta
+        try:
+            self.check_split_combinations()
+        except Exception as e:
+            logger.error(f"Erro ao verificar combinações de trechos avulsos: {e}")
 
         # Verifica e envia o heartbeat se devido (ex: a cada 7 dias)
         self.send_heartbeat_if_due()

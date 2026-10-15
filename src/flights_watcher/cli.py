@@ -98,6 +98,9 @@ def test_alert(
     is_shutdown: bool = typer.Option(
         False, "--shutdown", "-s", help="Dispara um alerta de encerramento do processo"
     ),
+    is_split: bool = typer.Option(
+        False, "--split", "-S", help="Dispara um alerta de teste de VIAGEM COMBINADA (trechos avulsos)"
+    ),
 ) -> None:
     """Envia um alerta de teste para validar a integração de e-mail ou Telegram."""
     email_notifier = EmailNotifier()
@@ -109,6 +112,8 @@ def test_alert(
         stats["uptime"] = "7 dia(s), 2 hora(s), 15 minuto(s)"
         stats["routes_matrix"] = service.build_routes_matrix()
         stats["total_configured_routes"] = len(stats["routes_matrix"])
+        stats["split_combinations"] = service.build_split_combinations()
+
 
         if channel in ("all", "email"):
             if email_notifier.is_configured:
@@ -179,6 +184,53 @@ def test_alert(
             elif channel == "telegram":
                 console.print("[bold red]✗ Telegram não configurado no .env.[/bold red]")
         return
+
+    if is_split:
+        fake_combo = {
+            "id": "combo:bsb-gru-ida-02set27+gru-bsb-volta-05set27-teste",
+            "departure_date": "2027-09-02",
+            "return_date": "2027-09-05",
+            "outbound_id": "bsb-gru-ida-02set27",
+            "inbound_id": "gru-bsb-volta-05set27",
+            "outbound_origin": "BSB",
+            "outbound_destination": "GRU",
+            "outbound_price": 280.0,
+            "outbound_airline": "LATAM Airlines",
+            "outbound_url": "https://www.google.com/travel/flights/search?tfs=GhoSCjIwMjctMDktMDJqBRIDQlNCcgUSA0dSVUIBAUgBmAEC&hl=pt-BR&gl=BR&curr=BRL",
+            "inbound_origin": "GRU",
+            "inbound_destination": "BSB",
+            "inbound_price": 290.0,
+            "inbound_airline": "Gol Transportes Aéreos",
+            "inbound_url": "https://www.google.com/travel/flights/search?tfs=GhoSCjIwMjctMDktMDVqBRIDR1JVcgUSA0JTQkIBAUgBmAEC&hl=pt-BR&gl=BR&curr=BRL",
+            "total_price": 570.0,
+            "target_price": 600.0,
+            "currency": "BRL",
+            "round_trip_min_price": 817.0,
+            "savings": 247.0,
+            "status": "Abaixo da Meta",
+            "status_badge": "🟢",
+        }
+        if channel in ("all", "email"):
+            if email_notifier.is_configured:
+                console.print(f"Enviando e-mail de [green]VIAGEM AVULSA (SPLIT DEAL)[/green] para [cyan]{email_notifier.email_to}[/cyan]...")
+                if email_notifier.send_split_deal_alert(fake_combo):
+                    console.print(f"[bold green]✓ E-mail de viagem avulsa enviado com sucesso para {email_notifier.email_to}![/bold green]")
+                else:
+                    console.print("[bold red]✗ Falha ao enviar e-mail de viagem avulsa.[/bold red]")
+            else:
+                console.print("[yellow]⚠ E-mail não configurado no .env.[/yellow]")
+
+        if channel in ("all", "telegram"):
+            if telegram_notifier.is_configured:
+                console.print(f"Enviando Telegram de [green]VIAGEM AVULSA (SPLIT DEAL)[/green] para chat [cyan]{telegram_notifier.chat_id}[/cyan]...")
+                if telegram_notifier.send_split_deal_alert(fake_combo):
+                    console.print("[bold green]✓ Alerta de viagem avulsa enviado para o Telegram![/bold green]")
+                else:
+                    console.print("[bold red]✗ Falha ao enviar alerta no Telegram.[/bold red]")
+            elif channel == "telegram":
+                console.print("[bold red]✗ Telegram não configurado no .env.[/bold red]")
+        return
+
 
     fake_route = RouteConfig(
         id="bsb-cgh-teste",

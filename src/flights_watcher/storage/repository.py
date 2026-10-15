@@ -233,14 +233,19 @@ class FlightRepository:
             }
 
     def get_route_price_summary(self) -> dict[str, dict]:
-        """Retorna resumo do menor preço histórico e da companhia para cada route_id."""
+        """Retorna resumo do menor preço histórico, companhia e url para cada route_id."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT route_id, MIN(price) as min_price, currency, airline, COUNT(*) as checks_count
-                FROM price_history
-                GROUP BY route_id
+                SELECT p.route_id, p.price as min_price, p.currency, p.airline, p.google_flights_url, counts.checks_count
+                FROM price_history p
+                INNER JOIN (
+                    SELECT route_id, MIN(price) as min_price, COUNT(*) as checks_count
+                    FROM price_history
+                    GROUP BY route_id
+                ) counts ON p.route_id = counts.route_id AND p.price = counts.min_price
+                GROUP BY p.route_id
                 """
             )
             summary = {}
@@ -249,6 +254,70 @@ class FlightRepository:
                     "min_price": float(row["min_price"]) if row["min_price"] is not None else None,
                     "currency": row["currency"],
                     "airline": row["airline"] or "-",
+                    "google_flights_url": row["google_flights_url"],
                     "checks_count": row["checks_count"],
                 }
             return summary
+
+    def should_notify_combo(
+        self, combo_id: str, total_price: float, target_price: float, cooldown_hours: int = 12
+    ) -> bool:
+        """Verifica se o alerta de oferta combinada (Split-Ticket) deve ser disparado."""
+        if total_price > target_price:
+            return False
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT price, notified_at FROM notifications
+                WHERE route_id = ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (combo_id,),
+            )
+            row = cursor.fetchone()
+
+            if not row:
+                return True
+
+            last_notified_price = float(row["price"])
+            last_notified_time = datetime.fromisoformat(row["notified_at"])
+
+            if total_price < last_notified_price:
+                logger.info(
+                    f"Preço do combo {combo_id} caiu ainda mais ({total_price} < {last_notified_price})! Notificando..."
+                )
+                return True
+
+            if datetime.now() - last_notified_time > timedelta(hours=cooldown_hours):
+                logger.info(
+                    f"Cooldown de {cooldown_hours}h expirou para combo {combo_id}! Relembrando..."
+                )
+                return True
+
+            logger.debug(
+                f"Alerta suprimido para combo {combo_id}: já notificado recentemente a {last_notified_price}."
+            )
+            return False
+
+    def record_combo_notification(
+        self, combo_id: str, total_price: float, currency: str = "BRL"
+    ) -> None:
+        """Registra notificação enviada para oferta combinada."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO notifications (route_id, price, currency, notified_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    combo_id,
+                    total_price,
+                    currency,
+                    datetime.now().isoformat(),
+                ),
+            )
+            conn.commit()
+

@@ -408,3 +408,32 @@ def test_cli_history_with_data(tmp_path, mock_deal):
         assert "BSB" in result.stdout
         assert "CGH" in result.stdout
         assert "480.00" in result.stdout
+
+
+@patch("flights_watcher.cli.EmailNotifier")
+def test_cli_test_alert_split_email(mock_email_cls):
+    mock_email = MagicMock()
+    mock_email.is_configured = True
+    mock_email.email_to = "test@example.com"
+    mock_email.send_split_deal_alert.return_value = True
+    mock_email_cls.return_value = mock_email
+
+    result = runner.invoke(app, ["test-alert", "--channel", "email", "--split"])
+    assert result.exit_code == 0
+    assert "E-mail de viagem avulsa enviado com sucesso" in result.stdout
+    mock_email.send_split_deal_alert.assert_called_once()
+
+
+@patch("flights_watcher.cli.TelegramNotifier")
+def test_cli_test_alert_split_telegram(mock_telegram_cls):
+    mock_telegram = MagicMock()
+    mock_telegram.is_configured = True
+    mock_telegram.chat_id = "123456"
+    mock_telegram.send_split_deal_alert.return_value = True
+    mock_telegram_cls.return_value = mock_telegram
+
+    result = runner.invoke(app, ["test-alert", "--channel", "telegram", "--split"])
+    assert result.exit_code == 0
+    assert "Alerta de viagem avulsa enviado para o Telegram" in result.stdout
+    mock_telegram.send_split_deal_alert.assert_called_once()
+

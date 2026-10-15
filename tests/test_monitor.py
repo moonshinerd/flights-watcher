@@ -12,6 +12,7 @@ from flights_watcher.storage.repository import FlightRepository
 class MockNotifier(NotifierPort):
     def __init__(self):
         self.sent_alerts = []
+        self.sent_split_deals = []
         self.sent_errors = []
         self.sent_heartbeats = []
         self.sent_shutdowns = []
@@ -19,6 +20,11 @@ class MockNotifier(NotifierPort):
     def send_deal_alert(self, route: RouteConfig, deal: FlightDeal) -> bool:
         self.sent_alerts.append((route, deal))
         return True
+
+    def send_split_deal_alert(self, combo: dict) -> bool:
+        self.sent_split_deals.append(combo)
+        return True
+
 
     def send_error_alert(self, error_message: str, context: str | None = None) -> bool:
         self.sent_errors.append((error_message, context))
@@ -379,3 +385,92 @@ def test_monitor_run_forever_fatal_crash_sends_shutdown(tmp_path, mock_search_cl
             service.run_forever()
 
     notifier.send_shutdown_alert.assert_called_once()
+
+
+def test_are_airports_co_located():
+    from flights_watcher.services.monitor import are_airports_co_located
+    assert are_airports_co_located("CGH", "GRU") is True
+    assert are_airports_co_located("GRU", "VCP") is True
+    assert are_airports_co_located("SDU", "GIG") is True
+    assert are_airports_co_located("BSB", "BSB") is True
+    assert are_airports_co_located("CGH", "GIG") is False
+    assert are_airports_co_located("BSB", "GRU") is False
+
+
+def test_monitor_build_split_combinations(tmp_path, mock_search_client, sample_deal):
+    routes_file = tmp_path / "routes.json"
+    routes_data = [
+        # Round trip (pacote fechado)
+        {"id": "r-rt", "origin": "BSB", "destination": "GRU", "departure_date": "2027-09-02", "return_date": "2027-09-05", "target_price": 600.0, "active": True},
+        # Ida avulsa
+        {"id": "r-ida-1", "origin": "BSB", "destination": "GRU", "departure_date": "2027-09-02", "target_price": 300.0, "active": True},
+        {"id": "r-ida-2", "origin": "BSB", "destination": "CGH", "departure_date": "2027-09-02", "target_price": 300.0, "active": True},
+        # Volta avulsa
+        {"id": "r-volta-1", "origin": "GRU", "destination": "BSB", "departure_date": "2027-09-05", "target_price": 300.0, "active": True},
+        # Volta inválida temporalmente (antes da ida)
+        {"id": "r-volta-old", "origin": "GRU", "destination": "BSB", "departure_date": "2027-09-01", "target_price": 300.0, "active": True},
+    ]
+    routes_file.write_text(json.dumps(routes_data), encoding="utf-8")
+
+    repo = FlightRepository(tmp_path / "test.db")
+    service = MonitorService(search_client=mock_search_client, repository=repo, routes_file=routes_file)
+
+    # 1. Sem preços gravados -> 2 combinações válidas com status Aguardando Abertura
+    combos = service.build_split_combinations()
+    assert len(combos) == 2
+    assert combos[0]["status"] == "Aguardando Abertura"
+    assert "https://www.google.com/travel/flights" in combos[0]["outbound_url"]
+    assert "https://www.google.com/travel/flights" in combos[0]["inbound_url"]
+
+    # 2. Salva preços:
+    # RT = 817.0
+    repo.save_deal(sample_deal.model_copy(update={"route_id": "r-rt", "price": 817.0, "return_date": "2027-09-05"}))
+    # Ida GRU = 375.0
+    repo.save_deal(sample_deal.model_copy(update={"route_id": "r-ida-1", "destination": "GRU", "price": 375.0, "return_date": None}))
+    # Ida CGH = 380.0
+    repo.save_deal(sample_deal.model_copy(update={"route_id": "r-ida-2", "destination": "CGH", "price": 380.0, "return_date": None}))
+    # Volta GRU = 374.0
+    repo.save_deal(sample_deal.model_copy(update={"route_id": "r-volta-1", "origin": "GRU", "destination": "BSB", "price": 374.0, "return_date": None}))
+
+    combos = service.build_split_combinations()
+    assert len(combos) == 2
+    # Menor combinação é r-ida-1 + r-volta-1 = 375 + 374 = 749.0
+    assert combos[0]["total_price"] == 749.0
+    assert combos[0]["savings"] == round(817.0 - 749.0, 2)  # 68.0
+    assert combos[0]["status_badge"] == "🟡"
+
+    # Segunda combinação é r-ida-2 + r-volta-1 = 380 + 374 = 754.0
+    assert combos[1]["total_price"] == 754.0
+
+
+def test_monitor_check_split_combinations_triggers_notification(tmp_path, mock_search_client, sample_deal):
+    routes_file = tmp_path / "routes.json"
+    routes_data = [
+        {"id": "r-ida", "origin": "BSB", "destination": "GRU", "departure_date": "2027-09-02", "target_price": 300.0, "active": True},
+        {"id": "r-volta", "origin": "GRU", "destination": "BSB", "departure_date": "2027-09-05", "target_price": 300.0, "active": True},
+    ]
+    routes_file.write_text(json.dumps(routes_data), encoding="utf-8")
+
+    repo = FlightRepository(tmp_path / "test.db")
+    notifier = MockNotifier()
+    service = MonitorService(
+        search_client=mock_search_client,
+        repository=repo,
+        notifier=notifier,
+        routes_file=routes_file,
+    )
+
+    # Preço abaixo da meta combinada: 280 + 290 = 570 <= 600
+    repo.save_deal(sample_deal.model_copy(update={"route_id": "r-ida", "price": 280.0, "return_date": None}))
+    repo.save_deal(sample_deal.model_copy(update={"route_id": "r-volta", "origin": "GRU", "destination": "BSB", "price": 290.0, "return_date": None}))
+
+    alerted = service.check_split_combinations()
+    assert len(alerted) == 1
+    assert alerted[0]["total_price"] == 570.0
+    assert len(notifier.sent_split_deals) == 1
+
+    # Segunda chamada imediata com o mesmo preço -> suprime notificação (cooldown)
+    alerted_again = service.check_split_combinations()
+    assert len(alerted_again) == 0
+    assert len(notifier.sent_split_deals) == 1
+
