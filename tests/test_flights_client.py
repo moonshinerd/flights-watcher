@@ -240,3 +240,114 @@ def test_search_route_handles_exception(mock_search_flights_cls):
 
     deals = client.search_route(route)
     assert deals == []
+
+
+def test_build_google_flights_booking_url_one_way():
+    from flights_watcher.clients.flights_client import build_google_flights_booking_url
+
+    outbound_legs = [
+        {
+            "origin": "BSB",
+            "destination": "GRU",
+            "date": "2027-09-02",
+            "airline_code": "LA",
+            "flight_number": "4768",
+        }
+    ]
+    url = build_google_flights_booking_url(
+        origin="BSB",
+        destination="GRU",
+        departure_date="2027-09-02",
+        return_date=None,
+        outbound_legs=outbound_legs,
+        price=522.45,
+        currency="BRL",
+    )
+    assert "https://www.google.com/travel/flights/booking?tfs=" in url
+    assert "curr=BRL" in url
+    assert "hl=pt-BR" in url
+    assert "gl=BR" in url
+
+
+def test_build_google_flights_booking_url_with_session_and_rt():
+    from flights_watcher.clients.flights_client import build_google_flights_booking_url
+
+    outbound_legs = [
+        {
+            "origin": "BSB",
+            "destination": "GRU",
+            "date": "2027-09-02",
+            "airline_code": "LA",
+            "flight_number": "3657",
+        }
+    ]
+    return_legs = [
+        {
+            "origin": "GRU",
+            "destination": "BSB",
+            "date": "2027-09-05",
+            "airline_code": "LA",
+            "flight_number": "4773",
+        }
+    ]
+    url = build_google_flights_booking_url(
+        origin="BSB",
+        destination="GRU",
+        departure_date="2027-09-02",
+        return_date="2027-09-05",
+        outbound_legs=outbound_legs,
+        return_legs=return_legs,
+        session_id="MOCK_SESSION_12345",
+        price=817.0,
+        currency="BRL",
+    )
+    assert "https://www.google.com/travel/flights/booking?tfs=" in url
+    assert "&tfu=" in url
+    assert "curr=BRL" in url
+
+
+def test_build_google_flights_booking_url_fallback_when_no_legs():
+    from flights_watcher.clients.flights_client import build_google_flights_booking_url
+
+    url = build_google_flights_booking_url(
+        origin="BSB",
+        destination="CGH",
+        departure_date="2027-09-03",
+        return_date=None,
+        outbound_legs=[],
+        currency="BRL",
+    )
+    assert "https://www.google.com/travel/flights/search?tfs=" in url
+
+
+def test_to_domain_with_flight_numbers_generates_booking_url():
+    client = FlightSearchClient()
+    route = RouteConfig(
+        id="test-booking-gen",
+        origin="BSB",
+        destination="CGH",
+        departure_date="2027-09-03",
+        target_price=650.0,
+    )
+    data = {
+        "price": 380.0,
+        "currency": "BRL",
+        "duration": 100,
+        "stops": 0,
+        "outbound": {
+            "legs": [
+                {
+                    "airline": {"code": "LA", "name": "LATAM Airlines"},
+                    "flight_number": "4527",
+                    "departure_airport": {"code": "BSB"},
+                    "arrival_airport": {"code": "CGH"},
+                    "departure_time": "2027-09-03T08:00:00",
+                    "arrival_time": "2027-09-03T09:40:00",
+                }
+            ]
+        },
+    }
+    deal = client._to_domain(route, data, session_id="SESSION_TEST")
+    assert "https://www.google.com/travel/flights/booking?tfs=" in deal.google_flights_url
+    assert "&tfu=" in deal.google_flights_url
+
